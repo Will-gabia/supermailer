@@ -1,0 +1,48 @@
+import { expect, test } from '@playwright/test';
+const createUniqueSuffix = (): string => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+
+test.describe('template management', () => {
+  test('supports creating, listing, and previewing templates with variables', async ({ page }) => {
+    // 1. Log in
+    await page.goto('/login');
+    await page.fill('input[name="email"]', 'admin@supermailer.local');
+    await page.fill('input[name="password"]', 'supermailer-admin');
+    await page.click('button[type="submit"]');
+    
+    // Wait for auth to complete
+    await page.waitForURL('/subscribers');
+
+    // 2. Navigate to Templates
+    await page.click('button:has-text("Templates")');
+    await page.waitForURL('/templates');
+
+    // 3. Create a template
+    const templateName = `test_template_${createUniqueSuffix()}`;
+    await page.fill('input[name="templateName"]', templateName);
+    await page.fill('input[name="templateSubject"]', 'Hello {{firstName}}');
+    await page.fill('textarea[name="templateHtml"]', '<p>Welcome to {{company}}, {{firstName}}!</p>');
+    await page.click('button:has-text("Create Template")');
+
+    // 4. Verify template is in list
+    const templateRow = page.locator(`li[data-testid="template-${templateName}"]`);
+    await expect(templateRow).toBeVisible();
+    await expect(templateRow).toContainText('firstName');
+    await expect(templateRow).toContainText('company');
+
+    // 5. Open template for preview
+    await templateRow.locator('button:has-text("Edit / Preview")').click();
+
+    // 6. Enter preview data and render
+    await page.fill('textarea[name="previewData"]', '{"firstName": "Alice", "company": "Acme Corp"}');
+    await page.click('button:has-text("Render Preview")');
+
+    // 7. Verify preview output
+    await expect(page.locator('[data-testid="preview-subject"]')).toContainText('Hello Alice');
+    await expect(page.locator('[data-testid="preview-html"]')).toContainText('Welcome to Acme Corp, Alice!');
+    
+    // 8. Edit the template and save
+    await page.fill('input[name="templateSubject"]', 'Hi {{firstName}}!');
+    await page.click('button:has-text("Update Template")');
+    await expect(page.locator('[data-testid="template-form-success"]')).toContainText('Saved successfully');
+  });
+});

@@ -1,0 +1,6 @@
+coverage
+dist
+.turbo
+playwright-report
+test-results
+pnpm-lock.yaml

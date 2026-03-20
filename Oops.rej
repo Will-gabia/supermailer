@@ -1,0 +1,4 @@
+@@ -31,3 +31,3 @@
+     const db = createManagementConsoleDatabase(pool);
+     repositories = createRepositories(db);
+ 

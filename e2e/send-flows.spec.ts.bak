@@ -1,0 +1,57 @@
+import { expect, test } from '@playwright/test';
+
+const createUniqueSuffix = (): string => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+
+test('individual and campaign send flows enqueue and show queued statuses', async ({ page }) => {
+  await page.goto('/login');
+  await page.fill('input[name="email"]', 'admin@supermailer.local');
+  await page.fill('input[name="password"]', 'supermailer-admin');
+  await page.click('button[type="submit"]');
+  await page.waitForURL('/subscribers');
+
+  await page.click('button:has-text("Templates")');
+  await page.waitForURL('/templates');
+
+  const templateName = `send_flow_template_${createUniqueSuffix()}`;
+  await page.fill('input[name="templateName"]', templateName);
+  await page.fill('input[name="templateSubject"]', 'Hello {{firstName}}');
+  await page.fill('textarea[name="templateHtml"]', '<p>Hello {{firstName}}</p>');
+  await page.click('button:has-text("Create Template")');
+  await expect(page.locator(`li[data-testid="template-${templateName}"]`)).toBeVisible();
+
+  const suppressedEmail = `hardbounce-${createUniqueSuffix()}@example.com`;
+  const campaignRecipient = `campaign-${createUniqueSuffix()}@gmail.com`;
+
+  await page.click('button:has-text("Subscribers")');
+  await page.waitForURL('/subscribers');
+  await page.fill('[data-testid="subscriber-email-input"]', suppressedEmail);
+  await page.fill('[data-testid="subscriber-display-name-input"]', 'Hard Bounce');
+  await page.click('button:has-text("Create Subscriber")');
+  const hardBounceSubscriber = page.locator(`[data-testid="subscriber-${suppressedEmail}"]`);
+  await expect(hardBounceSubscriber).toBeVisible();
+  await hardBounceSubscriber.getByRole('button', { name: 'Mark Hard Bounce' }).click();
+
+  await page.click('button:has-text("Sends")');
+  await page.waitForURL('/sends');
+
+  await page.selectOption('[data-testid="individual-send-template"]', { label: templateName });
+  await page.fill('[data-testid="individual-send-to"]', 'alice@example.com');
+  const individualSendResponse = page.waitForResponse((response) =>
+    response.url().includes('/api/admin/individual-sends') && response.request().method() === 'POST',
+  );
+  await page.click('button:has-text("Send Individual Email")');
+  expect((await individualSendResponse).status()).toBe(202);
+
+  await page.selectOption('[data-testid="campaign-send-template"]', { label: templateName });
+  await page.fill('[data-testid="campaign-send-recipients"]', `${campaignRecipient}\n${suppressedEmail}`);
+  const campaignSendResponse = page.waitForResponse((response) =>
+    response.url().includes('/api/admin/campaign-sends') && response.request().method() === 'POST',
+  );
+  await page.click('button:has-text("Enqueue Campaign")');
+  expect((await campaignSendResponse).status()).toBe(202);
+
+  const sendList = page.locator('[data-testid="send-list"]');
+  await expect(sendList).toContainText('alice@example.com (individual) — queued — send-', { timeout: 15000 });
+  await expect(sendList).toContainText(`campaign — ${campaignRecipient} — queued — send-`, { timeout: 15000 });
+  await expect(sendList).not.toContainText(`${suppressedEmail} — queued`);
+});

@@ -1,0 +1,83 @@
+import { expect, test } from '@playwright/test';
+
+const createUniqueSuffix = (): string =>
+  `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+
+test('delivery reporting and event history display correctly', async ({
+  page,
+}) => {
+  await page.goto('/login');
+  await page.fill('input[name="email"]', 'admin@supermailer.local');
+  await page.fill('input[name="password"]', 'supermailer-admin');
+  await page.click('button[type="submit"]');
+  await page.waitForURL('/subscribers');
+
+  // Verify reporting page
+  await page.click('button:has-text("Reporting")');
+  await page.waitForURL('/reporting');
+  await expect(page.locator('text="Delivery Reporting"')).toBeVisible();
+  await expect(
+    page.locator('[data-testid="reporting-status-counts"]'),
+  ).toBeVisible();
+  await expect(
+    page.locator('[data-testid="reporting-code-histogram"]'),
+  ).toBeVisible();
+  await expect(
+    page.locator('[data-testid="reporting-node-breakdown"]'),
+  ).toBeVisible();
+
+  // Let's create a send and ingest a delivery event to make sure it shows up
+  const templateName = `event_flow_template_${createUniqueSuffix()}`;
+  await page.click('button:has-text("Templates")');
+  await page.waitForURL('/templates');
+  await page.fill('input[name="templateName"]', templateName);
+  await page.fill('input[name="templateSubject"]', 'Event test');
+  await page.fill('textarea[name="templateHtml"]', '<p>Test</p>');
+  await page.click('button:has-text("Create Template")');
+  await expect(
+    page.locator(`li[data-testid="template-${templateName}"]`),
+  ).toBeVisible();
+
+  const recipient = `events-${createUniqueSuffix()}@example.com`;
+
+  await page.click('button:has-text("Sends")');
+  await page.waitForURL('/sends');
+
+  await page.selectOption('[data-testid="individual-send-template"]', {
+    label: templateName,
+  });
+  await page.fill('[data-testid="individual-send-to"]', recipient);
+
+  const sendRequest = page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/admin/individual-sends') &&
+      response.request().method() === 'POST',
+  );
+  await page.click('button:has-text("Send Individual Email")');
+  await sendRequest;
+
+  // Find the send in the list
+  const sendList = page.locator('[data-testid="send-list"]');
+  const sendItem = sendList.locator('li', { hasText: recipient });
+  await expect(sendItem).toBeVisible({ timeout: 15000 });
+
+  await expect(
+    sendItem.getByRole('button', { name: 'View History' }),
+  ).toBeEnabled();
+
+  // Click View History
+  await sendItem.getByRole('button', { name: 'View History' }).click();
+
+  // Wait for events panel to load
+  const eventsPanel = page
+    .locator(`[data-testid^="send-events-"]`)
+    .filter({ hasText: 'Event History' });
+  await expect(eventsPanel).toBeVisible();
+
+  // Verify webhook panel shows up for this individual send
+  const webhookPanel = page.locator(`[data-testid^="send-webhook-"]`);
+  await expect(webhookPanel).toBeVisible();
+  await expect(webhookPanel).toContainText('Outbound Webhook Status');
+  await expect(webhookPanel).toContainText('http://localhost:4010/webhooks/result');
+  await expect(webhookPanel.locator('[data-testid="webhook-status"]')).toBeVisible();
+});

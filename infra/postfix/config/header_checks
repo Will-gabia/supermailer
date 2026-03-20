@@ -1,0 +1,1 @@
+/^X-Supermailer-Send-Id:\s*(.+)$/ WARN supermailer-send-id=$1

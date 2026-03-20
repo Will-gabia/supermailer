@@ -1,0 +1,28 @@
+# Issues
+
+- 2026-03-20: `git worktree` cannot be used because `/Users/will/Jobs/projects/labs/supermailer` is not a git repository; `worktree_path` is set to the workspace root for this session.
+
+- 2026-03-20: `pnpm --filter @supermailer/does-not-exist test` reports no matching projects but in this pnpm version did not surface a non-zero exit via shell checks, so the fast-fail scenario should be revisited if strict exit-code enforcement is needed later.
+
+- 2026-03-20: Browser scaffold QA surfaced a missing `favicon.ico` request at `http://localhost:5173`; resolved by explicitly defining a favicon in the HTML head.
+- 2026-03-20: The required `-- send-state-machine` and `-- terminal-state-monotonicity` Vitest selectors are substring filters, so matching tests in multiple files run; test names should keep those unique tokens intentional to avoid accidental cross-file scope broadening.
+- 2026-03-20: `@supermailer/testing` helpers used by app integration tests require explicit TS project references from consuming apps, otherwise build-mode `rootDir` / file-list errors surface during diagnostics and typecheck.
+- 2026-03-20: `apps/mail-worker/src/queue/primitives.ts` currently uses an `as unknown as` cast around `queue.add.bind(queue)` to satisfy BullMQ typing; verification passed, but future delegates should avoid expanding that pattern unless necessary.
+
+- 2026-03-20: Initial `docker compose up -d` failed because host ports `5432` and `6379` were already allocated by unrelated local containers; the harness was adjusted to deterministic high ports `15432` and `16379` to keep agent execution reproducible.
+
+- 2026-03-20: Hono route-level `use('*', admin middleware)` on the shared `/api` prefix intercepted external API-key endpoints and returned admin-session `401` responses; attaching admin auth middleware per protected admin route avoids that route-shadowing bug.
+
+- 2026-03-20: Simply swallowing the `/api/auth/session` error was insufficient for browser QA because the app stayed rendered on `/subscribers`; the unauthenticated catch path still needs a client-side redirect to `/login` even when the session endpoint stops returning `401`.
+
+- 2026-03-20: Existing `subscriber-sync` API-key integration coverage still posts only `{ source: "crm" }`; the external sync endpoint must preserve that legacy accepted response when no `endpointUrl` is supplied, otherwise unrelated auth-scope tests fail.
+- 2026-03-20: Local ad hoc repro using Ruby WEBrick was unreliable because this environment lacks the bundled `webrick` gem, so `data:` URLs were a more dependable zero-dependency sync source for Playwright verification.
+
+- 2026-03-20: Cleaned up accidental scope drift in Task 7. Development on Task 7 unintentionally pulled in routing rules artifacts (e.g. `e2e/routing-rules.spec.ts`) intended for Task 8. Removed these files and reverted unintended logging additions in the frontend App to preserve strictly the template-related flow required by Task 7.
+
+- 2026-03-20: pnpm --filter @supermailer/management-console test:integration -- routing-rule-versioning matches multiple integration files under Vitest substring filtering, so the integration config now needs longer hook/test timeouts for container-backed suites to stay stable.
+- 2026-03-20: `pnpm playwright test e2e/send-flows.spec.ts` initially failed when reusing existing dev servers because stale `NODE_ENV=development` server state caused send-flow API failures and data collisions; disabling `reuseExistingServer` in Playwright config forced clean test-server boot for deterministic results.
+- 2026-03-20: Send-flow e2e also surfaced persistent-data collisions (duplicate subscriber/template names); the test now uses unique per-run identifiers to avoid false negatives from prior local runs.
+- 2026-03-20: `apps/mail-worker` integration selectors still execute multiple files due to Vitest substring filtering; setting longer hook/test timeouts plus serial file execution avoids flaky container startup timeout failures during targeted command runs.
+- Removed stray patch artifacts (`.orig`, `.patch`, `.rej`) in `apps/management-console/src/server/routes/` that were causing code-quality blockers.
+- 2026-03-20: `apps/mail-worker/src/index.integration.test.ts` originally only asserted the configured port value, which let the health-endpoint gap slip through without proving any server was listening.

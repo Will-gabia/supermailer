@@ -1,0 +1,31 @@
+{
+  "name": "@supermailer/management-console",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@hono/node-server": "^1.14.1",
+    "@supermailer/config": "workspace:*",
+    "@supermailer/contracts": "workspace:*",
+    "@supermailer/domain": "workspace:*",
+    "bullmq": "^5.56.2",
+    "drizzle-orm": "^0.45.1",
+    "hono": "^4.7.5",
+    "pg": "^8.20.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "scripts": {
+    "dev": "vite --host localhost --port 4173",
+    "dev:server": "tsx src/server/index.ts",
+    "lint": "eslint .",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run --config vitest.config.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
+  },
+  "devDependencies": {
+    "@supermailer/testing": "workspace:^",
+    "@types/pg": "^8.18.0",
+    "drizzle-kit": "^0.31.10"
+  }
+}

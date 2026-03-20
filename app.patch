@@ -1,0 +1,177 @@
+--- apps/management-console/src/client/App.tsx
++++ apps/management-console/src/client/App.tsx
+@@ -74,6 +74,27 @@
+   createdAt: string;
+ };
+ 
++type DeliveryEventRecord = {
++  id: string;
++  type: string;
++  occurredAt: string;
++  providerEventId: string;
++  smtpReplyCode: string | null;
++  smtpEnhancedCode: string | null;
++  reason: string | null;
++  relay: string | null;
++  postfixQueueId: string | null;
++  receivedAt: string;
++};
++
++type ReportingData = {
++  statusCounts: Array<{ status: string; count: number }>;
++  codeHistogram: Array<{ eventType: string; smtpReplyCode: string | null; smtpEnhancedCode: string | null; count: number }>;
++  nodeBreakdown: Array<{ node: string; eventType: string; count: number }>;
++};
++
+ const getPathname = (): string => window.location.pathname;
+ 
+ const navigate = (pathname: string): void => {
+@@ -167,6 +188,11 @@
+   const [individualWebhookUrl, setIndividualWebhookUrl] = useState('http://localhost:4010/webhooks/result');
+   const [campaignRecipients, setCampaignRecipients] = useState('bob@gmail.com\nhardbounce@example.com');
+   const [campaignTemplateId, setCampaignTemplateId] = useState('');
++  const [reportingData, setReportingData] = useState<ReportingData | null>(null);
++  const [reportingLoadError, setReportingLoadError] = useState<string | null>(null);
++  const [selectedSendId, setSelectedSendId] = useState<string | null>(null);
++  const [sendEvents, setSendEvents] = useState<DeliveryEventRecord[]>([]);
++  const [sendEventsError, setSendEventsError] = useState<string | null>(null);
+ 
+   useEffect(() => {
+     const handlePopState = () => {
+@@ -324,6 +350,22 @@
+     void loadSendFlowData();
+   }, [pathname, session.status]);
+ 
++  useEffect(() => {
++    if (session.status !== 'authenticated' || pathname !== '/reporting') {
++      return;
++    }
++
++    const loadReportingData = async () => {
++      setReportingLoadError(null);
++      try {
++        const payload = await loadJson<{ data: ReportingData }>('/api/admin/reporting/delivery-events', { method: 'GET' });
++        setReportingData(payload.data);
++      } catch (error) {
++        setReportingLoadError(error instanceof Error ? error.message : 'Failed to load reporting data');
++      }
++    };
++    void loadReportingData();
++  }, [pathname, session.status]);
++
+   const title = useMemo(() => {
+     if (pathname === '/login') {
+@@ -343,6 +385,10 @@
+       return 'Send Flows';
+     }
+ 
++    if (pathname === '/reporting') {
++      return 'Reporting';
++    }
++
+     return 'Subscribers';
+   }, [pathname]);
+ 
+@@ -666,6 +712,19 @@
+     }
+   };
+ 
++  const loadSendEvents = async (sendId: string) => {
++    setSelectedSendId(sendId);
++    setSendEventsError(null);
++    setSendEvents([]);
++    try {
++      const res = await loadJson<{ data: DeliveryEventRecord[] }>(`/api/admin/sends/${sendId}/delivery-events`);
++      setSendEvents(res.data);
++    } catch (error) {
++      setSendEventsError(error instanceof Error ? error.message : 'Failed to load send events');
++    }
++  };
++
+   const activeDefaultRuleCount = routingRules.filter((rule) => rule.matchType === 'default' && (rule.isActive ?? true)).length;
+ 
+   if (session.status === 'loading') {
+@@ -707,6 +766,7 @@
+           <button onClick={() => navigate('/templates')} type="button">Templates</button>
+           <button onClick={() => navigate('/routing')} type="button">Routing</button>
+           <button onClick={() => navigate('/sends')} type="button">Sends</button>
++          <button onClick={() => navigate('/reporting')} type="button">Reporting</button>
+           <button onClick={() => void logout()} type="button">Logout</button>
+         </nav>
+       </header>
+@@ -1035,11 +1095,96 @@
+           <h3>Queued Sends</h3>
+           <ul data-testid="send-list">
+             {sends.map((send) => (
+-              <li key={send.id} data-testid={`send-${send.id}`}>
+-                {send.kind} — {send.recipientEmail} — {send.status} — {send.queueJobId ?? 'not_queued'}
++              <li key={send.id} data-testid={`send-${send.id}`} style={{ marginBottom: '1rem' }}>
++                <div>
++                  <strong>{send.recipientEmail}</strong> ({send.kind}) — {send.status} — {send.queueJobId ?? 'not_queued'}
++                  <button type="button" onClick={() => void loadSendEvents(send.id)} style={{ marginLeft: '1rem' }}>View History</button>
++                </div>
++                {selectedSendId === send.id && (
++                  <div data-testid={`send-events-${send.id}`} style={{ marginTop: '0.5rem', padding: '1rem', border: '1px solid #ccc', backgroundColor: '#fafafa' }}>
++                    <h4>Event History</h4>
++                    {sendEventsError ? <p role="alert">{sendEventsError}</p> : null}
++                    {sendEvents.length === 0 && !sendEventsError ? <p>No events found for this send.</p> : (
++                      <ul>
++                        {sendEvents.map(event => (
++                          <li key={event.id} data-testid={`event-${event.id}`} style={{ fontSize: '0.9em', marginBottom: '0.5rem' }}>
++                            <strong>{event.type}</strong> at {new Date(event.occurredAt).toLocaleString()}
++                            {event.relay && <span> via {event.relay}</span>}
++                            {event.smtpReplyCode && <span> (SMTP {event.smtpReplyCode} {event.smtpEnhancedCode})</span>}
++                            {event.reason && <div><em>Reason:</em> {event.reason}</div>}
++                          </li>
++                        ))}
++                      </ul>
++                    )}
++                  </div>
++                )}
+               </li>
+             ))}
+           </ul>
++        </section>
++      ) : pathname === '/reporting' ? (
++        <section>
++          <h2>Delivery Reporting</h2>
++          {reportingLoadError ? <p role="alert">{reportingLoadError}</p> : null}
++          {!reportingData && !reportingLoadError ? <p>Loading reporting data...</p> : reportingData && (
++            <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap' }}>
++              <div style={{ flex: '1 1 300px', padding: '1rem', border: '1px solid #ccc' }}>
++                <h3>Status Breakdown</h3>
++                <ul data-testid="reporting-status-counts">
++                  {reportingData.statusCounts.length === 0 ? <li>No statuses recorded</li> : reportingData.statusCounts.map(count => (
++                    <li key={count.status}>
++                      <strong>{count.status}</strong>: {count.count}
++                    </li>
++                  ))}
++                </ul>
++              </div>
++              
++              <div style={{ flex: '1 1 300px', padding: '1rem', border: '1px solid #ccc' }}>
++                <h3>SMTP Code Histogram</h3>
++                <ul data-testid="reporting-code-histogram">
++                  {reportingData.codeHistogram.length === 0 ? <li>No codes recorded</li> : reportingData.codeHistogram.map((item, idx) => (
++                    <li key={idx}>
++                      <strong>{item.eventType}</strong>: {item.smtpReplyCode ?? 'N/A'} {item.smtpEnhancedCode ? `(${item.smtpEnhancedCode})` : ''} - {item.count} events
++                    </li>
++                  ))}
++                </ul>
++              </div>
++              
++              <div style={{ flex: '1 1 300px', padding: '1rem', border: '1px solid #ccc' }}>
++                <h3>Node Performance</h3>
++                <ul data-testid="reporting-node-breakdown">
++                  {reportingData.nodeBreakdown.length === 0 ? <li>No node events recorded</li> : reportingData.nodeBreakdown.map((item, idx) => (
++                    <li key={idx}>
++                      <strong>{item.node}</strong> ({item.eventType}): {item.count}
++                    </li>
++                  ))}
++                </ul>
++              </div>
++            </div>
++          )}
+         </section>
+       ) : (
+         <section>

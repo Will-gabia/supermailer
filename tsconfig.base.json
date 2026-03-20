@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "baseUrl": ".",
+    "paths": {
+      "@supermailer/config": ["packages/config/src/index.ts"],
+      "@supermailer/contracts": ["packages/contracts/src/index.ts"],
+      "@supermailer/domain": ["packages/domain/src/index.ts"],
+      "@supermailer/testing": ["packages/testing/src/index.ts"]
+    }
+  }
+}
