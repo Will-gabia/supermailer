@@ -1,0 +1,14 @@
+node_modules
+**/node_modules
+.git
+.turbo
+dist
+**/dist
+.sisyphus
+test-results
+playwright-report
+coverage
+*.log
+.env
+.env.*
+!.env.example

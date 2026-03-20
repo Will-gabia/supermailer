@@ -1,10 +1,19 @@
 import { serve } from '@hono/node-server';
 import { loadEnv } from '@supermailer/config';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { createManagementConsoleApp } from './app';
 import { ensureSeededAdminUser } from './bootstrap';
-import { createDatabasePool, createManagementConsoleDatabase, runMigrations } from './db';
-import { createBullMqSendDispatchEnqueuer, createInMemorySendDispatchEnqueuer } from './queue/send-dispatch';
+import {
+  createDatabasePool,
+  createManagementConsoleDatabase,
+  runMigrations,
+} from './db';
+import {
+  createBullMqSendDispatchEnqueuer,
+  createInMemorySendDispatchEnqueuer,
+} from './queue/send-dispatch';
 import { createRepositories } from './repositories';
 
 const bootstrap = async (): Promise<void> => {
@@ -18,14 +27,29 @@ const bootstrap = async (): Promise<void> => {
 
   await ensureSeededAdminUser({ env, repositories });
 
-  const sendDispatchEnqueuer = env.nodeEnv === 'test' ? createInMemorySendDispatchEnqueuer() : createBullMqSendDispatchEnqueuer(env.redisUrl);
+  const sendDispatchEnqueuer =
+    env.nodeEnv === 'test'
+      ? createInMemorySendDispatchEnqueuer()
+      : createBullMqSendDispatchEnqueuer(env.redisUrl);
 
-  const app = createManagementConsoleApp({ env, db, repositories, sendDispatchEnqueuer });
+  const serverEntryPath = fileURLToPath(import.meta.url);
+  const serverDirectory = path.dirname(serverEntryPath);
+  const spaDistPath = path.resolve(serverDirectory, '../..');
+  const spaIndexPath = path.join(spaDistPath, 'index.html');
+  const staticServingOptions =
+    env.nodeEnv === 'production'
+      ? { staticRoot: spaDistPath, spaIndexPath }
+      : {};
+
+  const app = createManagementConsoleApp(
+    { env, db, repositories, sendDispatchEnqueuer },
+    staticServingOptions,
+  );
 
   const server = serve({
     fetch: app.fetch,
     port: env.managementConsolePort,
-    hostname: 'localhost',
+    hostname: env.managementConsoleHost,
   });
 
   const closeServer = async (): Promise<void> => {

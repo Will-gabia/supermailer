@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "emitDeclarationOnly": false,
+    "outDir": "dist/server",
+    "rootDir": "src",
+    "baseUrl": ".",
+    "paths": {},
+    "tsBuildInfoFile": "dist/server/tsconfig.build.tsbuildinfo"
+  },
+  "include": ["src/server/**/*.ts", "src/shared/**/*.ts"],
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/**/*.integration.test.ts",
+    "src/**/*.integration.test.tsx"
+  ]
+}

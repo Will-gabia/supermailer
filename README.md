@@ -40,6 +40,7 @@ Supermailer는 고객 대상 이메일 발송을 위한 관리형 플랫폼입�
 ### 인프라
 
 - `docker-compose.yml`: Postgres, Redis, Mailpit, 로컬 Postfix 실행
+- `compose.production.yml`: management-console + mail-worker 프로덕션 컨테이너 실행
 - `infra/postfix`: Postfix 로컬 테스트 구성을 위한 설정/스크립트
 
 ## 로컬 개발 시 기본 포트
@@ -55,6 +56,8 @@ Supermailer는 고객 대상 이메일 발송을 위한 관리형 플랫폼입�
 ## 빠른 시작 체크리스트
 
 처음 실행할 때는 아래 항목만 순서대로 따라오면 됩니다.
+
+주의: 아래 절차는 **로컬 개발/검증용**입니다.
 
 - [ ] Node.js 20+, pnpm 9+, Docker 설치 확인
 - [ ] 의존성 설치
@@ -93,12 +96,13 @@ Supermailer는 고객 대상 이메일 발송을 위한 관리형 플랫폼입�
 
 운영자 관점에서는 아래가 중요합니다.
 
-- 시스템을 빠르게 띄우는 방법
-- 상태 점검 방법
-- 관리자 콘솔 로그인 정보
-- Mailpit/Postfix/워커 상태 확인 방법
+- 실제 운영 환경에서 Postgres/Redis를 기존 서버 주소로 연결하는 방법
+- 운영용 `.env.production` 템플릿을 채우는 방법
+- 배포 전/배포 후 점검 방법
+- 장애 시 기본 점검 순서
+- Postfix/SMTP relay 연동 방법
 
-→ `INSTALL.md`의 **운영자용 빠른 실행 가이드**부터 읽으면 됩니다.
+→ [`OPERATIONS.md`](./OPERATIONS.md)와 [`POSTFIX.md`](./POSTFIX.md)를 먼저 읽으면 됩니다.
 
 ### 개발자용
 
@@ -109,7 +113,7 @@ Supermailer는 고객 대상 이메일 발송을 위한 관리형 플랫폼입�
 - Playwright/통합 테스트 동작 방식
 - 포트 충돌/초기화/트러블슈팅 절차
 
-→ `INSTALL.md`의 **개발자용 상세 개발 가이드**부터 읽으면 됩니다.
+→ [`INSTALL.md`](./INSTALL.md)를 먼저 읽으면 됩니다.
 
 ## 자주 쓰는 명령어
 
@@ -126,6 +130,10 @@ Supermailer는 고객 대상 이메일 발송을 위한 관리형 플랫폼입�
 - 타입 검사
   ```bash
   pnpm typecheck
+  ```
+- 프로덕션 빌드
+  ```bash
+  pnpm build
   ```
 - 단위 테스트
   ```bash
@@ -165,7 +173,27 @@ Supermailer는 고객 대상 이메일 발송을 위한 관리형 플랫폼입�
 
 ## 문서 안내
 
-- 설치/실행 가이드: [`INSTALL.md`](./INSTALL.md)
+- 로컬 개발/검증 가이드: [`INSTALL.md`](./INSTALL.md)
+- 운영/배포 가이드: [`OPERATIONS.md`](./OPERATIONS.md)
+- 운영 환경 변수 예시: [`.env.production.example`](./.env.production.example)
+- Postfix 연동 가이드: [`POSTFIX.md`](./POSTFIX.md)
 - 저장소 규칙: [`CONVENTIONS.md`](./CONVENTIONS.md)
 - 에이전트 작업 규칙: [`AGENTS.md`](./AGENTS.md)
 - 변경 이력: [`CHANGELOG.md`](./CHANGELOG.md)
+
+## 프로덕션 배포 요약
+
+프로덕션 최소 구성은 아래 2개 컨테이너입니다.
+
+- `management-console`: API + 빌드된 SPA를 단일 Node 프로세스로 제공
+- `mail-worker`: BullMQ 기반 워커 + `/health` 제공
+
+실행 예시:
+
+```bash
+docker compose -f compose.production.yml up --build -d
+```
+
+운영 상세 절차(외부 Postgres/Redis/SMTP 전제)는 [`OPERATIONS.md`](./OPERATIONS.md)를 참고하세요.
+
+운영용 환경 변수는 [`.env.production.example`](./.env.production.example)에서 시작하면 됩니다.

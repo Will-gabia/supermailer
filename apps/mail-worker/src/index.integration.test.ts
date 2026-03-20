@@ -53,6 +53,20 @@ describe('mail worker integration scaffold', () => {
     await expect(response.json()).resolves.toEqual({ error: 'not_found' });
   });
 
+  it('binds the health server to the configured host', async () => {
+    const server = await startMailWorkerHealthServer(0, '0.0.0.0');
+    activeServers.push(server);
+
+    const address = server.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    const response = await fetch(`http://127.0.0.1:${port}/health`);
+
+    expect(response.status).toBe(200);
+    expect(
+      typeof address === 'object' && address ? address.address : null,
+    ).toBe('0.0.0.0');
+  });
+
   it('shuts the health endpoint down cleanly', async () => {
     const server = await startMailWorkerHealthServer(0);
 

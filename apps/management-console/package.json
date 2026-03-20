@@ -18,6 +18,8 @@
   "scripts": {
     "dev": "vite --host localhost --port 4173",
     "dev:server": "tsx src/server/index.ts",
+    "build": "vite build && tsc -p tsconfig.build.json && tsc-alias -p tsconfig.build.json --resolve-full-paths && cp -R src/server/db/migrations dist/server/server/db/migrations",
+    "start": "node dist/server/server/index.js",
     "lint": "eslint .",
     "typecheck": "tsc -b tsconfig.json",
     "test": "vitest run --config vitest.config.ts",

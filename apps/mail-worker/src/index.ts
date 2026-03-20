@@ -27,12 +27,13 @@ const createHealthServer = () =>
 
 export const startMailWorkerHealthServer = async (
   port = getMailWorkerHealth().port,
+  host = loadEnv().mailWorkerHost,
 ): Promise<Server> => {
   const server = createHealthServer();
 
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
-    server.listen(port, '127.0.0.1', () => {
+    server.listen(port, host, () => {
       server.off('error', reject);
       resolve();
     });
@@ -42,6 +43,10 @@ export const startMailWorkerHealthServer = async (
 };
 
 export const stopMailWorkerHealthServer = async (server: Server) => {
+  if (!server.listening) {
+    return;
+  }
+
   await new Promise<void>((resolve, reject) => {
     server.close((error) => {
       if (error) {
@@ -80,7 +85,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const health = startMailWorker();
   process.stdout.write(`${JSON.stringify(health)}\n`);
 
-  const healthServerPromise = startMailWorkerHealthServer(health.port);
+  const env = loadEnv();
+  const healthServerPromise = startMailWorkerHealthServer(
+    health.port,
+    env.mailWorkerHost,
+  );
   const runtime = startMailWorkerRuntime();
   const shutdown = async () => {
     const healthServer = await healthServerPromise;

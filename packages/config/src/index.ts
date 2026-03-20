@@ -3,7 +3,9 @@ import { config as loadDotEnv } from 'dotenv';
 export type SupermailerEnv = {
   nodeEnv: string;
   managementConsolePort: number;
+  managementConsoleHost: string;
   mailWorkerPort: number;
+  mailWorkerHost: string;
   databaseUrl: string;
   redisUrl: string;
   adminEmail: string;
@@ -18,7 +20,9 @@ export type SupermailerEnv = {
   sendSmtpPort: number;
 };
 
-export const loadEnv = (overrides: Partial<NodeJS.ProcessEnv> = {}): SupermailerEnv => {
+export const loadEnv = (
+  overrides: Partial<NodeJS.ProcessEnv> = {},
+): SupermailerEnv => {
   loadDotEnv();
 
   const merged = {
@@ -29,13 +33,19 @@ export const loadEnv = (overrides: Partial<NodeJS.ProcessEnv> = {}): Supermailer
   return {
     nodeEnv: merged.NODE_ENV ?? 'development',
     managementConsolePort: Number(merged.MANAGEMENT_CONSOLE_PORT ?? 3000),
+    managementConsoleHost: merged.MANAGEMENT_CONSOLE_HOST ?? '0.0.0.0',
     mailWorkerPort: Number(merged.MAIL_WORKER_PORT ?? 3001),
-    databaseUrl: merged.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:15432/supermailer',
+    mailWorkerHost: merged.MAIL_WORKER_HOST ?? '0.0.0.0',
+    databaseUrl:
+      merged.DATABASE_URL ??
+      'postgres://postgres:postgres@localhost:15432/supermailer',
     redisUrl: merged.REDIS_URL ?? 'redis://localhost:16379',
     adminEmail: merged.ADMIN_EMAIL ?? 'admin@supermailer.local',
     adminPassword: merged.ADMIN_PASSWORD ?? 'supermailer-admin',
-    authTokenSecret: merged.AUTH_TOKEN_SECRET ?? 'supermailer-local-auth-secret',
-    sessionCookieName: merged.SESSION_COOKIE_NAME ?? 'supermailer_admin_session',
+    authTokenSecret:
+      merged.AUTH_TOKEN_SECRET ?? 'supermailer-local-auth-secret',
+    sessionCookieName:
+      merged.SESSION_COOKIE_NAME ?? 'supermailer_admin_session',
     sessionTtlHours: Number(merged.SESSION_TTL_HOURS ?? 24),
     mailpitSmtpHost: merged.MAILPIT_SMTP_HOST ?? 'localhost',
     mailpitSmtpPort: Number(merged.MAILPIT_SMTP_PORT ?? 1025),

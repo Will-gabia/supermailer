@@ -11,5 +11,7 @@ describe('config integration scaffold', () => {
     expect(env.mailpitSmtpPort).toBe(1025);
     expect(env.mailpitUiPort).toBe(8025);
     expect(env.sendSmtpPort).toBe(2525);
+    expect(env.managementConsoleHost).toBe('0.0.0.0');
+    expect(env.mailWorkerHost).toBe('0.0.0.0');
   });
 });

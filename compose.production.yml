@@ -1,0 +1,35 @@
+services:
+  management-console:
+    build:
+      context: .
+      dockerfile: Dockerfile.management-console
+    environment:
+      NODE_ENV: production
+      MANAGEMENT_CONSOLE_PORT: 3000
+      MANAGEMENT_CONSOLE_HOST: 0.0.0.0
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?ADMIN_EMAIL is required}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
+      AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:?AUTH_TOKEN_SECRET is required}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-supermailer_admin_session}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-24}
+      SENDSMTP_HOST: ${SENDSMTP_HOST:?SENDSMTP_HOST is required}
+      SENDSMTP_PORT: ${SENDSMTP_PORT:?SENDSMTP_PORT is required}
+    ports:
+      - '3000:3000'
+
+  mail-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.mail-worker
+    environment:
+      NODE_ENV: production
+      MAIL_WORKER_PORT: 3001
+      MAIL_WORKER_HOST: 0.0.0.0
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+      SENDSMTP_HOST: ${SENDSMTP_HOST:?SENDSMTP_HOST is required}
+      SENDSMTP_PORT: ${SENDSMTP_PORT:?SENDSMTP_PORT is required}
+    ports:
+      - '3001:3001'
