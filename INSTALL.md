@@ -230,7 +230,7 @@ pnpm lint
 pnpm typecheck
 pnpm test
 pnpm test:integration
-pnpm playwright test
+pnpm e2e
 ```
 
 ### E2E 참고 사항
@@ -313,7 +313,7 @@ curl -s http://localhost:3001/health
 docker compose down -v
 docker compose up -d
 pnpm test:integration
-pnpm playwright test
+pnpm e2e
 ```
 
 ---

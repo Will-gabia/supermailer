@@ -188,11 +188,31 @@ Supermailer는 고객 대상 이메일 발송을 위한 관리형 플랫폼입�
 - `management-console`: API + 빌드된 SPA를 단일 Node 프로세스로 제공
 - `mail-worker`: BullMQ 기반 워커 + `/health` 제공
 
-실행 예시:
+중요:
+
+- `compose.production.yml`에는 앱 컨테이너만 포함됩니다.
+- Postgres, Redis, SMTP relay/Postfix는 운영 환경의 외부 주소를 `.env.production`으로 주입해야 합니다.
+
+권장 순서:
 
 ```bash
-docker compose -f compose.production.yml up --build -d
+cp .env.production.example .env.production
+docker compose --env-file .env.production -f compose.production.yml build
+docker compose --env-file .env.production -f compose.production.yml up -d
+docker compose --env-file .env.production -f compose.production.yml ps
+curl -s http://localhost:3000/api/health
+curl -s http://localhost:3001/health
 ```
+
+운영 전에는 최소한 아래 값을 실제 환경 값으로 채워야 합니다.
+
+- `DATABASE_URL`
+- `REDIS_URL`
+- `ADMIN_EMAIL`
+- `ADMIN_PASSWORD`
+- `AUTH_TOKEN_SECRET`
+- `SENDSMTP_HOST`
+- `SENDSMTP_PORT`
 
 운영 상세 절차(외부 Postgres/Redis/SMTP 전제)는 [`OPERATIONS.md`](./OPERATIONS.md)를 참고하세요.
 

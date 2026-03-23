@@ -105,3 +105,6 @@
 - 2026-03-23: The same query-sync pattern extends safely to `/subscribers` for `subscriberTab` only; keeping forms, edit state, and sync inputs out of the URL avoids confusing deep links while still making filtered views shareable.
 - 2026-03-23: `/templates` can safely persist only the selected saved template id, while `/reporting` benefits from a lightweight query-backed section selector; both fit the current SPA without a router migration.
 - 2026-03-23: For the remaining admin pages, `routing.section` and API-key `scope` selection are the only query-backed states that add restore/share value without leaking secrets or persisting mutable drafts.
+- 2026-03-23: The top-level README production example should include `--env-file .env.production` because `compose.production.yml` requires external infra variables and is not runnable as-is without the production env file.
+- 2026-03-23: Top-level docs are clearer when they standardize on the root workspace wrapper `pnpm e2e`; it matches `package.json` while still invoking Playwright under the hood.
+- 2026-03-23: README and OPERATIONS stay easier to trust when they present the same production bring-up order: `.env.production` preparation first, then `docker compose ... build`, then `docker compose ... up -d`, then health checks.

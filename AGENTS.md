@@ -51,7 +51,7 @@
    pnpm test:integration
    ```
 5. ```bash
-   pnpm playwright test
+   pnpm e2e
    ```
 
 ## 6. 추가 권장 확인 사항

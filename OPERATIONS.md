@@ -100,11 +100,15 @@ cp .env.production.example .env.production
 - `management-console` (API + 빌드된 SPA 동시 제공)
 - `mail-worker`
 
-실행:
+실행 개요:
 
 ```bash
-docker compose -f compose.production.yml up --build -d
+cp .env.production.example .env.production
+docker compose --env-file .env.production -f compose.production.yml build
+docker compose --env-file .env.production -f compose.production.yml up -d
 ```
+
+즉, 실제 운영 절차는 `.env.production`을 먼저 준비한 뒤 `build`와 `up -d`를 분리해 수행하는 흐름을 권장합니다.
 
 ### 4-2. 운영용 환경 파일 준비
 
