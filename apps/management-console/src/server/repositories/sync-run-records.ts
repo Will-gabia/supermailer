@@ -3,7 +3,9 @@ import { eq } from 'drizzle-orm';
 import type { ManagementConsoleDatabase } from '../db';
 import { syncRunRecords } from '../db/schema';
 
-export const createSyncRunRecordsRepository = (db: ManagementConsoleDatabase) => ({
+export const createSyncRunRecordsRepository = (
+  db: ManagementConsoleDatabase,
+) => ({
   create: async (input: {
     id: string;
     syncRunId: string;
@@ -32,5 +34,15 @@ export const createSyncRunRecordsRepository = (db: ManagementConsoleDatabase) =>
 
     return record;
   },
-  listForRun: async (syncRunId: string) => db.select().from(syncRunRecords).where(eq(syncRunRecords.syncRunId, syncRunId)),
+  listForRun: async (syncRunId: string) =>
+    db
+      .select()
+      .from(syncRunRecords)
+      .where(eq(syncRunRecords.syncRunId, syncRunId)),
+  detachSubscriber: async (subscriberId: string) => {
+    await db
+      .update(syncRunRecords)
+      .set({ subscriberId: null })
+      .where(eq(syncRunRecords.subscriberId, subscriberId));
+  },
 });

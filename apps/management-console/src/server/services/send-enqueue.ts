@@ -8,16 +8,28 @@ import { renderTemplate } from './template-preview';
 import { getSubscriberEligibility } from './subscriber-eligibility';
 
 const toObjectRecord = (value: unknown): Record<string, unknown> =>
-  value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 
 const toStringRecord = (value: unknown): Record<string, string> => {
   const source = toObjectRecord(value);
 
-  return Object.fromEntries(Object.entries(source).filter(([, entryValue]) => typeof entryValue === 'string')) as Record<string, string>;
+  return Object.fromEntries(
+    Object.entries(source).filter(
+      ([, entryValue]) => typeof entryValue === 'string',
+    ),
+  ) as Record<string, string>;
 };
 
-const createDeterministicSendId = (scopeSeed: string, recipientEmail: string): string => {
-  const digest = createHmac('sha256', `${scopeSeed}:${recipientEmail}`).update('supermailer-send').digest('hex').toUpperCase();
+const createDeterministicSendId = (
+  scopeSeed: string,
+  recipientEmail: string,
+): string => {
+  const digest = createHmac('sha256', `${scopeSeed}:${recipientEmail}`)
+    .update('supermailer-send')
+    .digest('hex')
+    .toUpperCase();
   const canonical = digest.replace(/[^0-9A-Z]/g, '').replace(/[ILOU]/g, 'A');
   const encoded = `${canonical}ZZZZZZZZZZZZZZZZZZZZZZZZZZ`.slice(0, 26);
 
@@ -25,7 +37,9 @@ const createDeterministicSendId = (scopeSeed: string, recipientEmail: string): s
 };
 
 const createDeterministicSigningSecret = (seed: string): string =>
-  createHmac('sha256', 'supermailer-individual-webhook').update(seed).digest('hex');
+  createHmac('sha256', 'supermailer-individual-webhook')
+    .update(seed)
+    .digest('hex');
 
 export type IndividualSendInput = {
   to: string;
@@ -46,6 +60,7 @@ export type CampaignEnqueueInput = {
   text?: string;
   variables?: Record<string, string>;
   recipients: string[];
+  groupIds?: string[];
 };
 
 export type EnqueuedRecipient = {
@@ -84,6 +99,65 @@ export type CampaignEnqueueResult = {
   skipped: SkippedRecipient[];
 };
 
+type AudienceProvenance = {
+  manual: boolean;
+  groups: Array<{ id: string; name: string }>;
+};
+
+const normalizeGroupIds = (groupIds: string[] | undefined): string[] =>
+  Array.from(
+    new Set(
+      (Array.isArray(groupIds) ? groupIds : []).filter(
+        (groupId): groupId is string =>
+          typeof groupId === 'string' && groupId.trim().length > 0,
+      ),
+    ),
+  );
+
+const resolveCampaignAudience = async (
+  appContext: ManagementConsoleAppContext,
+  input: CampaignEnqueueInput,
+): Promise<Map<string, AudienceProvenance>> => {
+  const audience = new Map<string, AudienceProvenance>();
+  const directRecipients = Array.isArray(input.recipients)
+    ? input.recipients
+    : [];
+  const groupIds = normalizeGroupIds(input.groupIds);
+
+  const groupAudienceRows =
+    groupIds.length > 0
+      ? await appContext.repositories.subscriberGroupMemberships.listEmailsForGroupIds(
+          groupIds,
+        )
+      : [];
+
+  for (const email of directRecipients) {
+    const normalizedEmail = normalizeEmailAddress(email);
+    audience.set(normalizedEmail, {
+      manual: true,
+      groups: audience.get(normalizedEmail)?.groups ?? [],
+    });
+  }
+
+  for (const row of groupAudienceRows) {
+    const normalizedEmail = normalizeEmailAddress(row.email);
+    const current = audience.get(normalizedEmail) ?? {
+      manual: false,
+      groups: [],
+    };
+    const groups = current.groups.some((group) => group.id === row.groupId)
+      ? current.groups
+      : [...current.groups, { id: row.groupId, name: row.groupName }];
+
+    audience.set(normalizedEmail, {
+      manual: current.manual,
+      groups,
+    });
+  }
+
+  return audience;
+};
+
 type RenderedSnapshot = {
   templateId: string | null;
   subject: string;
@@ -102,7 +176,9 @@ const resolveRenderedSnapshot = async (
   },
 ): Promise<RenderedSnapshot> => {
   if (input.templateId) {
-    const template = await appContext.repositories.templates.findById(input.templateId);
+    const template = await appContext.repositories.templates.findById(
+      input.templateId,
+    );
 
     if (!template) {
       throw new Error('Template not found');
@@ -114,7 +190,9 @@ const resolveRenderedSnapshot = async (
       templateId: template.id,
       subject: renderTemplate(template.subject, variables),
       html: renderTemplate(template.html, variables),
-      text: template.textContent ? renderTemplate(template.textContent, variables) : null,
+      text: template.textContent
+        ? renderTemplate(template.textContent, variables)
+        : null,
     };
   }
 
@@ -129,7 +207,10 @@ const resolveRenderedSnapshot = async (
     templateId: null,
     subject,
     html,
-    text: typeof input.text === 'string' && input.text.trim() ? input.text.trim() : null,
+    text:
+      typeof input.text === 'string' && input.text.trim()
+        ? input.text.trim()
+        : null,
   };
 };
 
@@ -143,7 +224,10 @@ export const enqueueIndividualSend = async (
   input: IndividualSendInput,
 ): Promise<IndividualSendResult> => {
   const normalizedRecipient = normalizeEmailAddress(input.to);
-  const eligibility = await getSubscriberEligibility(appContext, normalizedRecipient);
+  const eligibility = await getSubscriberEligibility(
+    appContext,
+    normalizedRecipient,
+  );
   const sendSeed = createUlid();
   const sendId = createDeterministicSendId(sendSeed, normalizedRecipient);
 
@@ -159,7 +243,10 @@ export const enqueueIndividualSend = async (
   }
 
   const snapshot = await resolveRenderedSnapshot(appContext, input);
-  const route = await appContext.repositories.routingRules.findRouteForRecipient(normalizedRecipient);
+  const route =
+    await appContext.repositories.routingRules.findRouteForRecipient(
+      normalizedRecipient,
+    );
 
   const created = await appContext.repositories.sends.create({
     id: sendId,
@@ -177,12 +264,14 @@ export const enqueueIndividualSend = async (
   const enqueued = await dependencies.enqueueSend(created.id);
   await appContext.repositories.sends.setQueueJobId(created.id, enqueued.jobId);
 
-  const webhookUrl = typeof input.webhookUrl === 'string' ? input.webhookUrl.trim() : '';
+  const webhookUrl =
+    typeof input.webhookUrl === 'string' ? input.webhookUrl.trim() : '';
   let webhook: { targetUrl: string; signingSecret: string } | null = null;
 
   if (webhookUrl) {
     const signingSecret =
-      typeof input.webhookSigningSecret === 'string' && input.webhookSigningSecret.trim()
+      typeof input.webhookSigningSecret === 'string' &&
+      input.webhookSigningSecret.trim()
         ? input.webhookSigningSecret.trim()
         : createDeterministicSigningSecret(`${sendId}:${webhookUrl}`);
 
@@ -219,8 +308,11 @@ export const enqueueCampaignSend = async (
   dependencies: EnqueueDependencies,
   input: CampaignEnqueueInput,
 ): Promise<CampaignEnqueueResult> => {
-  const campaignId = (typeof input.campaignId === 'string' && input.campaignId.trim()) || createUlid();
-  const normalizedRecipients = Array.from(new Set((Array.isArray(input.recipients) ? input.recipients : []).map((email) => normalizeEmailAddress(email))));
+  const campaignId =
+    (typeof input.campaignId === 'string' && input.campaignId.trim()) ||
+    createUlid();
+  const audience = await resolveCampaignAudience(appContext, input);
+  const normalizedRecipients = Array.from(audience.keys());
 
   if (normalizedRecipients.length === 0) {
     throw new Error('Campaign recipients are required');
@@ -238,7 +330,10 @@ export const enqueueCampaignSend = async (
   const skipped: SkippedRecipient[] = [];
 
   for (const recipientEmail of normalizedRecipients) {
-    const eligibility = await getSubscriberEligibility(appContext, recipientEmail);
+    const eligibility = await getSubscriberEligibility(
+      appContext,
+      recipientEmail,
+    );
 
     if (!eligibility.eligible && eligibility.reason) {
       skipped.push({
@@ -249,7 +344,10 @@ export const enqueueCampaignSend = async (
     }
 
     const sendId = createDeterministicSendId(campaignId, recipientEmail);
-    const route = await appContext.repositories.routingRules.findRouteForRecipient(recipientEmail);
+    const route =
+      await appContext.repositories.routingRules.findRouteForRecipient(
+        recipientEmail,
+      );
     const created = await appContext.repositories.sends.create({
       id: sendId,
       kind: 'campaign',
@@ -257,6 +355,7 @@ export const enqueueCampaignSend = async (
       subjectSnapshot: snapshot.subject,
       htmlSnapshot: snapshot.html,
       textSnapshot: snapshot.text,
+      audienceProvenance: audience.get(recipientEmail) ?? null,
       status: 'queued',
       templateId: snapshot.templateId,
       routingRuleVersion: route?.rule.version ?? null,
@@ -264,7 +363,10 @@ export const enqueueCampaignSend = async (
     });
 
     const enqueued = await dependencies.enqueueSend(created.id);
-    await appContext.repositories.sends.setQueueJobId(created.id, enqueued.jobId);
+    await appContext.repositories.sends.setQueueJobId(
+      created.id,
+      enqueued.jobId,
+    );
 
     queued.push({
       email: recipientEmail,

@@ -11,6 +11,10 @@ export const createSendsRepository = (db: ManagementConsoleDatabase) => ({
     subjectSnapshot: string;
     htmlSnapshot: string;
     textSnapshot?: string | null;
+    audienceProvenance?: {
+      manual: boolean;
+      groups: Array<{ id: string; name: string }>;
+    } | null;
     status: string;
     templateId?: string | null;
     routingRuleVersion?: number | null;
@@ -25,6 +29,7 @@ export const createSendsRepository = (db: ManagementConsoleDatabase) => ({
         subjectSnapshot: input.subjectSnapshot,
         htmlSnapshot: input.htmlSnapshot,
         textSnapshot: input.textSnapshot ?? null,
+        audienceProvenance: input.audienceProvenance ?? null,
         status: input.status,
         templateId: input.templateId ?? null,
         routingRuleVersion: input.routingRuleVersion ?? null,

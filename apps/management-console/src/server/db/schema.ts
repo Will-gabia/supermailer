@@ -3,6 +3,7 @@ import {
   index,
   integer,
   jsonb,
+  primaryKey,
   pgTable,
   text,
   timestamp,
@@ -51,6 +52,46 @@ export const suppressions = pgTable(
   (table) => [
     uniqueIndex('suppressions_email_reason_idx').on(table.email, table.reason),
     index('suppressions_email_idx').on(table.email),
+  ],
+);
+
+export const subscriberGroups = pgTable(
+  'subscriber_groups',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [uniqueIndex('subscriber_groups_name_idx').on(table.name)],
+);
+
+export const subscriberGroupMemberships = pgTable(
+  'subscriber_group_memberships',
+  {
+    subscriberId: text('subscriber_id')
+      .notNull()
+      .references(() => subscribers.id, { onDelete: 'cascade' }),
+    groupId: text('group_id')
+      .notNull()
+      .references(() => subscriberGroups.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.subscriberId, table.groupId],
+      name: 'subscriber_group_memberships_pk',
+    }),
+    index('subscriber_group_memberships_subscriber_id_idx').on(
+      table.subscriberId,
+    ),
+    index('subscriber_group_memberships_group_id_idx').on(table.groupId),
   ],
 );
 
@@ -129,6 +170,10 @@ export const sends = pgTable(
     subjectSnapshot: text('subject_snapshot').notNull(),
     htmlSnapshot: text('html_snapshot').notNull(),
     textSnapshot: text('text_snapshot'),
+    audienceProvenance: jsonb('audience_provenance').$type<{
+      manual: boolean;
+      groups: Array<{ id: string; name: string }>;
+    } | null>(),
     status: text('status').notNull(),
     templateId: text('template_id').references(() => templates.id),
     routingRuleVersion: integer('routing_rule_version'),
@@ -374,6 +419,8 @@ export const outboundWebhookDeliveries = pgTable(
 export const schema = {
   subscribers,
   suppressions,
+  subscriberGroups,
+  subscriberGroupMemberships,
   templates,
   sendSmtpNodes,
   routingRules,

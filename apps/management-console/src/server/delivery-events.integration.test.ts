@@ -461,5 +461,61 @@ describe('delivery-events integration', () => {
       targetUrl: 'https://webhook.example.com/callback',
       attemptCount: 0,
     });
+    expect(body.audienceProvenance).toBeNull();
+  });
+
+  it('exposes campaign audience provenance alongside delivery events', async () => {
+    const node = await harness.appContext.repositories.sendSmtpNodes.create({
+      id: createUlid(),
+      name: `node-${createUlid()}`,
+      host: 'relay.internal',
+      port: 2525,
+      priority: 1,
+    });
+    const send = await harness.appContext.repositories.sends.create({
+      id: createUlid(),
+      kind: 'campaign',
+      recipientEmail: 'grouped@example.com',
+      subjectSnapshot: 'Grouped',
+      htmlSnapshot: '<p>Grouped</p>',
+      status: 'queued',
+      sendSmtpNodeId: node.id,
+      audienceProvenance: {
+        manual: false,
+        groups: [{ id: 'group_123', name: 'VIP 고객' }],
+      },
+    });
+
+    await harness.appContext.repositories.deliveryEvents.append({
+      id: createUlid(),
+      sendId: send.id,
+      eventKey: 'evt-grouped-001',
+      eventType: 'delivered',
+      smtpCode: '250',
+      enhancedSmtpCode: '2.0.0',
+      reason: 'Delivered',
+      relayIdentity: 'relay.internal',
+      queueId: `QID-${send.id}`,
+      provenance: 'test',
+      rawPayload: {},
+      occurredAt: new Date('2026-03-20T00:05:00.000Z'),
+    });
+
+    const adminCookie = await loginAsAdmin();
+    const response = await harness.app.request(
+      `/api/admin/sends/${send.id}/delivery-events`,
+      {
+        headers: {
+          cookie: adminCookie,
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.audienceProvenance).toEqual({
+      manual: false,
+      groups: [{ id: 'group_123', name: 'VIP 고객' }],
+    });
   });
 });

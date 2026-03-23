@@ -40,7 +40,9 @@ describe('campaign-enqueue integration', () => {
       }),
     });
 
-    const payload = (await createResponse.json()) as { data: { rawKey: string } };
+    const payload = (await createResponse.json()) as {
+      data: { rawKey: string };
+    };
     return payload.data.rawKey;
   };
 
@@ -72,7 +74,11 @@ describe('campaign-enqueue integration', () => {
         campaignId,
         templateId: template.id,
         variables: { firstName: 'Customer' },
-        recipients: ['bob@gmail.com', 'hardbounce@example.com', 'bob@gmail.com'],
+        recipients: [
+          'bob@gmail.com',
+          'hardbounce@example.com',
+          'bob@gmail.com',
+        ],
       }),
     });
 
@@ -82,18 +88,34 @@ describe('campaign-enqueue integration', () => {
       data: {
         campaignId: string;
         totals: { requested: number; queued: number; skipped: number };
-        queued: Array<{ email: string; sendId: string; queueJobId: string; status: 'queued' }>;
-        skipped: Array<{ email: string; reason: 'hard_bounce_suppression' | 'unsubscribed' }>;
+        queued: Array<{
+          email: string;
+          sendId: string;
+          queueJobId: string;
+          status: 'queued';
+        }>;
+        skipped: Array<{
+          email: string;
+          reason: 'hard_bounce_suppression' | 'unsubscribed';
+        }>;
       };
     };
 
     expect(payload.status).toBe('accepted');
     expect(payload.data.campaignId).toBe(campaignId);
-    expect(payload.data.totals).toEqual({ requested: 2, queued: 1, skipped: 1 });
-    expect(payload.data.skipped).toEqual([{ email: 'hardbounce@example.com', reason: 'hard_bounce_suppression' }]);
+    expect(payload.data.totals).toEqual({
+      requested: 2,
+      queued: 1,
+      skipped: 1,
+    });
+    expect(payload.data.skipped).toEqual([
+      { email: 'hardbounce@example.com', reason: 'hard_bounce_suppression' },
+    ]);
     expect(payload.data.queued).toHaveLength(1);
     expect(payload.data.queued[0].email).toBe('bob@gmail.com');
-    expect(payload.data.queued[0].queueJobId).toBe(`send-${payload.data.queued[0].sendId}`);
+    expect(payload.data.queued[0].queueJobId).toBe(
+      `send-${payload.data.queued[0].sendId}`,
+    );
 
     const sends = await harness.appContext.repositories.sends.list();
     const campaignSends = sends.filter((send) => send.kind === 'campaign');
@@ -105,6 +127,116 @@ describe('campaign-enqueue integration', () => {
       subjectSnapshot: 'Campaign for Customer',
       htmlSnapshot: '<p>Hello Customer</p>',
       templateId: template.id,
+      audienceProvenance: {
+        manual: true,
+        groups: [],
+      },
+    });
+  });
+
+  it('merges direct recipients with saved-group audiences and deduplicates by normalized email', async () => {
+    const rawKey = await createApiKey();
+
+    const template = await harness.appContext.repositories.templates.create({
+      id: createUlid(),
+      name: `group-campaign-template-${createUlid()}`,
+      subject: 'Group Campaign',
+      html: '<p>Hello audience</p>',
+    });
+
+    const group = await harness.appContext.repositories.subscriberGroups.create(
+      {
+        id: createUlid(),
+        name: `Campaign Group ${createUlid()}`,
+      },
+    );
+
+    const eligibleSubscriber =
+      await harness.appContext.repositories.subscribers.create({
+        id: createUlid(),
+        email: 'group-member@example.com',
+        displayName: 'Grouped Member',
+      });
+    const unsubscribedSubscriber =
+      await harness.appContext.repositories.subscribers.create({
+        id: createUlid(),
+        email: 'group-unsubscribed@example.com',
+        displayName: 'Grouped Unsubscribed',
+        unsubscribedAt: new Date(),
+      });
+
+    await harness.appContext.repositories.subscriberGroupMemberships.replaceForSubscriber(
+      {
+        subscriberId: eligibleSubscriber.id,
+        groupIds: [group.id],
+      },
+    );
+    await harness.appContext.repositories.subscriberGroupMemberships.replaceForSubscriber(
+      {
+        subscriberId: unsubscribedSubscriber.id,
+        groupIds: [group.id],
+      },
+    );
+
+    const response = await harness.app.request('/api/campaign-sends', {
+      method: 'POST',
+      headers: {
+        'x-api-key': rawKey,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        templateId: template.id,
+        recipients: ['GROUP-MEMBER@example.com', 'manual@example.com'],
+        groupIds: [group.id],
+      }),
+    });
+
+    expect(response.status).toBe(202);
+    const payload = (await response.json()) as {
+      status: 'accepted';
+      data: {
+        totals: { requested: number; queued: number; skipped: number };
+        queued: Array<{ email: string }>;
+        skipped: Array<{
+          email: string;
+          reason: 'hard_bounce_suppression' | 'unsubscribed';
+        }>;
+      };
+    };
+
+    expect(payload.status).toBe('accepted');
+    expect(payload.data.totals).toEqual({
+      requested: 3,
+      queued: 2,
+      skipped: 1,
+    });
+    expect(payload.data.queued.map((entry) => entry.email).sort()).toEqual([
+      'group-member@example.com',
+      'manual@example.com',
+    ]);
+    expect(payload.data.skipped).toEqual([
+      { email: 'group-unsubscribed@example.com', reason: 'unsubscribed' },
+    ]);
+
+    const sends = await harness.appContext.repositories.sends.list();
+    const groupedSend = sends.find(
+      (send) => send.recipientEmail === 'group-member@example.com',
+    );
+    const manualSend = sends.find(
+      (send) => send.recipientEmail === 'manual@example.com',
+    );
+
+    expect(groupedSend).toMatchObject({
+      audienceProvenance: {
+        manual: true,
+        groups: [{ id: group.id, name: group.name }],
+      },
+    });
+    expect(manualSend).toMatchObject({
+      audienceProvenance: {
+        manual: true,
+        groups: [],
+      },
     });
   });
 });

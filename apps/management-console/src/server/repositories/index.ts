@@ -10,6 +10,8 @@ import { createRoutingRulesRepository } from './routing-rules';
 import { createSendDispatchAttemptsRepository } from './send-dispatch-attempts';
 import { createSendSmtpNodesRepository } from './send-smtp-nodes';
 import { createSendsRepository } from './sends';
+import { createSubscriberGroupMembershipsRepository } from './subscriber-group-memberships';
+import { createSubscriberGroupsRepository } from './subscriber-groups';
 import { createSubscribersRepository } from './subscribers';
 import { createSuppressionsRepository } from './suppressions';
 import { createSyncRunsRepository } from './sync-runs';
@@ -21,6 +23,8 @@ export const createRepositories = (db: ManagementConsoleDatabase) => ({
   adminSessions: createAdminSessionsRepository(db),
   auditLogs: createAuditLogsRepository(db),
   subscribers: createSubscribersRepository(db),
+  subscriberGroups: createSubscriberGroupsRepository(db),
+  subscriberGroupMemberships: createSubscriberGroupMembershipsRepository(db),
   suppressions: createSuppressionsRepository(db),
   templates: createTemplatesRepository(db),
   sends: createSendsRepository(db),
@@ -45,6 +49,8 @@ export {
   createSendDispatchAttemptsRepository,
   createSendSmtpNodesRepository,
   createSendsRepository,
+  createSubscriberGroupMembershipsRepository,
+  createSubscriberGroupsRepository,
   createSubscribersRepository,
   createSuppressionsRepository,
   createSyncRunsRepository,

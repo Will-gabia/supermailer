@@ -138,17 +138,23 @@ export const createDeliveryEventsRouter = (
       }
 
       const events = await getSendEventHistory(appContext, sendId);
-      const webhookDelivery = await appContext.repositories.outboundWebhookDeliveries.findBySendId(sendId);
+      const webhookDelivery =
+        await appContext.repositories.outboundWebhookDeliveries.findBySendId(
+          sendId,
+        );
 
       return context.json({
         data: events,
-        webhookDelivery: webhookDelivery ? {
-          status: webhookDelivery.status,
-          targetUrl: webhookDelivery.targetUrl,
-          attemptCount: webhookDelivery.attemptCount,
-          lastAttemptAt: webhookDelivery.lastAttemptAt,
-          nextAttemptAt: webhookDelivery.nextAttemptAt,
-        } : null,
+        audienceProvenance: send.audienceProvenance ?? null,
+        webhookDelivery: webhookDelivery
+          ? {
+              status: webhookDelivery.status,
+              targetUrl: webhookDelivery.targetUrl,
+              attemptCount: webhookDelivery.attemptCount,
+              lastAttemptAt: webhookDelivery.lastAttemptAt,
+              nextAttemptAt: webhookDelivery.nextAttemptAt,
+            }
+          : null,
       });
     },
   );

@@ -33,15 +33,18 @@ export const createSubscribersRepository = (db: ManagementConsoleDatabase) => ({
 
     return record;
   },
-  update: async (id: string, input: {
-    email?: string;
-    sourceKey?: string | null;
-    externalId?: string | null;
-    displayName?: string | null;
-    metadata?: Record<string, unknown> | null;
-    unsubscribedAt?: Date | null;
-    lastSyncedAt?: Date | null;
-  }) => {
+  update: async (
+    id: string,
+    input: {
+      email?: string;
+      sourceKey?: string | null;
+      externalId?: string | null;
+      displayName?: string | null;
+      metadata?: Record<string, unknown> | null;
+      unsubscribedAt?: Date | null;
+      lastSyncedAt?: Date | null;
+    },
+  ) => {
     const [record] = await db
       .update(subscribers)
       .set({
@@ -52,7 +55,12 @@ export const createSubscribersRepository = (db: ManagementConsoleDatabase) => ({
         metadata: input.metadata,
         unsubscribedAt: input.unsubscribedAt,
         lastSyncedAt: input.lastSyncedAt,
-        status: input.unsubscribedAt === undefined ? undefined : input.unsubscribedAt ? 'unsubscribed' : 'active',
+        status:
+          input.unsubscribedAt === undefined
+            ? undefined
+            : input.unsubscribedAt
+              ? 'unsubscribed'
+              : 'active',
         updatedAt: new Date(),
       })
       .where(eq(subscribers.id, id))
@@ -61,12 +69,20 @@ export const createSubscribersRepository = (db: ManagementConsoleDatabase) => ({
     return record ?? null;
   },
   findById: async (id: string) => {
-    const [record] = await db.select().from(subscribers).where(eq(subscribers.id, id)).limit(1);
+    const [record] = await db
+      .select()
+      .from(subscribers)
+      .where(eq(subscribers.id, id))
+      .limit(1);
 
     return record ?? null;
   },
   findByEmail: async (email: string) => {
-    const [record] = await db.select().from(subscribers).where(eq(subscribers.email, normalizeEmailAddress(email))).limit(1);
+    const [record] = await db
+      .select()
+      .from(subscribers)
+      .where(eq(subscribers.email, normalizeEmailAddress(email)))
+      .limit(1);
 
     return record ?? null;
   },
@@ -74,7 +90,12 @@ export const createSubscribersRepository = (db: ManagementConsoleDatabase) => ({
     const [record] = await db
       .select()
       .from(subscribers)
-      .where(and(eq(subscribers.sourceKey, sourceKey), eq(subscribers.externalId, externalId)))
+      .where(
+        and(
+          eq(subscribers.sourceKey, sourceKey),
+          eq(subscribers.externalId, externalId),
+        ),
+      )
       .limit(1);
 
     return record ?? null;
@@ -96,12 +117,19 @@ export const createSubscribersRepository = (db: ManagementConsoleDatabase) => ({
           .from(subscribers)
           .where(
             or(
-              and(eq(subscribers.sourceKey, input.sourceKey), eq(subscribers.externalId, input.externalId)),
+              and(
+                eq(subscribers.sourceKey, input.sourceKey),
+                eq(subscribers.externalId, input.externalId),
+              ),
               eq(subscribers.email, normalizedEmail),
             ),
           )
           .limit(1)
-      : await db.select().from(subscribers).where(eq(subscribers.email, normalizedEmail)).limit(1);
+      : await db
+          .select()
+          .from(subscribers)
+          .where(eq(subscribers.email, normalizedEmail))
+          .limit(1);
 
     const current = existing[0];
 
@@ -142,5 +170,14 @@ export const createSubscribersRepository = (db: ManagementConsoleDatabase) => ({
 
     return { record: updated, operation: 'updated' as const };
   },
-  list: async () => db.select().from(subscribers).orderBy(desc(subscribers.createdAt)),
+  list: async () =>
+    db.select().from(subscribers).orderBy(desc(subscribers.createdAt)),
+  delete: async (id: string) => {
+    const [record] = await db
+      .delete(subscribers)
+      .where(eq(subscribers.id, id))
+      .returning();
+
+    return record ?? null;
+  },
 });
