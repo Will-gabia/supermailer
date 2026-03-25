@@ -5,9 +5,7 @@ import {
   SEND_DISPATCH_RETRY_BACKOFF_TYPE,
   SUPERMAILER_QUEUE_NAMES,
   createSendDispatchJobId,
-  createSubscriberSyncJobId,
   type SendDispatchJob,
-  type SubscriberSyncJob,
 } from '@supermailer/contracts';
 
 import { createRedisConnectionOptions } from './connection';
@@ -115,14 +113,6 @@ export const createSendDispatchQueue = (
 ): Queue<SendDispatchJob, void, string> =>
   createQueue<SendDispatchJob>(SUPERMAILER_QUEUE_NAMES.sendDispatch, options);
 
-export const createSubscriberSyncQueue = (
-  options: QueueFactoryOptions = {},
-): Queue<SubscriberSyncJob, void, string> =>
-  createQueue<SubscriberSyncJob>(
-    SUPERMAILER_QUEUE_NAMES.subscriberSync,
-    options,
-  );
-
 export const enqueueSendDispatchJob = async (
   queue: Queue<SendDispatchJob, void, string>,
   payload: SendDispatchJob,
@@ -138,15 +128,4 @@ export const enqueueSendDispatchJob = async (
         type: SEND_DISPATCH_RETRY_BACKOFF_TYPE,
       },
     },
-  );
-
-export const enqueueSubscriberSyncJob = async (
-  queue: Queue<SubscriberSyncJob, void, string>,
-  payload: SubscriberSyncJob,
-): Promise<EnqueuedQueueJob<SubscriberSyncJob>> =>
-  addIdempotentJob(
-    queue,
-    SUPERMAILER_QUEUE_NAMES.subscriberSync,
-    payload,
-    createSubscriberSyncJobId(payload.syncRunId),
   );

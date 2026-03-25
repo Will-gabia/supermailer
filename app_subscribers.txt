@@ -1,0 +1,449 @@
+  1302	              <div className="page-header">
+  1303	                <h1 className="page-title">구독자 관리</h1>
+  1304	                <div className="flex gap-2">
+  1305	                  <button
+  1306	                    className="btn btn-secondary"
+  1307	                    onClick={downloadSubscribersCsv}
+  1308	                  >
+  1309	                    CSV 다운로드
+  1310	                  </button>
+  1311	                  <button
+  1312	                    className="btn btn-primary"
+  1313	                    onClick={() => {
+  1314	                      document
+  1315	                        .getElementById('add-subscriber-form')
+  1316	                        ?.scrollIntoView({ behavior: 'smooth' });
+  1317	                    }}
+  1318	                  >
+  1319	                    + 신규 구독자
+  1320	                  </button>
+  1321	                </div>
+  1322	              </div>
+  1323	
+  1324	              <div className="grid grid-cols-4 mb-6">
+  1325	                <button
+  1326	                  className="stat-card stat-button"
+  1327	                  data-testid="subscriber-tab-all"
+  1328	                  onClick={() => setSubscriberTab('all')}
+  1329	                  type="button"
+  1330	                >
+  1331	                  <div className="stat-title">전체 구독자</div>
+  1332	                  <div className="stat-value">{allCount}</div>
+  1333	                </button>
+  1334	                <button
+  1335	                  className="stat-card stat-button"
+  1336	                  data-testid="subscriber-tab-eligible"
+  1337	                  onClick={() => setSubscriberTab('eligible')}
+  1338	                  type="button"
+  1339	                >
+  1340	                  <div
+  1341	                    className="stat-title"
+  1342	                    style={{ color: 'var(--color-success)' }}
+  1343	                  >
+  1344	                    발송 가능
+  1345	                  </div>
+  1346	                  <div className="stat-value">{eligibleCount}</div>
+  1347	                </button>
+  1348	                <button
+  1349	                  className="stat-card stat-button"
+  1350	                  data-testid="subscriber-tab-unsubscribed"
+  1351	                  onClick={() => setSubscriberTab('unsubscribed')}
+  1352	                  type="button"
+  1353	                >
+  1354	                  <div
+  1355	                    className="stat-title"
+  1356	                    style={{ color: 'var(--color-warning)' }}
+  1357	                  >
+  1358	                    수신 거부
+  1359	                  </div>
+  1360	                  <div className="stat-value">{unsubCount}</div>
+  1361	                </button>
+  1362	                <button
+  1363	                  className="stat-card stat-button"
+  1364	                  data-testid="subscriber-tab-suppressed"
+  1365	                  onClick={() => setSubscriberTab('suppressed')}
+  1366	                  type="button"
+  1367	                >
+  1368	                  <div
+  1369	                    className="stat-title"
+  1370	                    style={{ color: 'var(--color-error)' }}
+  1371	                  >
+  1372	                    발송 억제됨
+  1373	                  </div>
+  1374	                  <div className="stat-value">{suppCount}</div>
+  1375	                </button>
+  1376	              </div>
+  1377	
+  1378	              <div className="card">
+  1379	                <div
+  1380	                  className="card-header flex"
+  1381	                  style={{
+  1382	                    justifyContent: 'space-between',
+  1383	                    alignItems: 'center',
+  1384	                  }}
+  1385	                >
+  1386	                  <h3 className="card-title">구독자 그룹 관리</h3>
+  1387	                </div>
+  1388	                <div className="card-body">
+  1389	                  <p style={{ color: 'var(--text-secondary)', marginTop: 0 }}>
+  1390	                    상태 탭은 발송 가능 여부를 빠르게 보는 용도이고, 그룹은
+  1391	                    운영자가 직접 만든 관리용 묶음입니다.
+  1392	                  </p>
+  1393	                  <div className="flex gap-2 mb-4">
+  1394	                    <input
+  1395	                      type="text"
+  1396	                      aria-label="새 그룹 이름"
+  1397	                      placeholder="새 그룹 이름"
+  1398	                      value={groupName}
+  1399	                      onChange={(e) => setGroupName(e.target.value)}
+  1400	                    />
+  1401	                    <button
+  1402	                      className="btn btn-primary"
+  1403	                      onClick={createOrUpdateGroup}
+  1404	                      type="button"
+  1405	                    >
+  1406	                      {editingGroupId ? '그룹 수정' : '그룹 추가'}
+  1407	                    </button>
+  1408	                    {editingGroupId && (
+  1409	                      <button
+  1410	                        className="btn btn-secondary"
+  1411	                        onClick={() => {
+  1412	                          setEditingGroupId(null);
+  1413	                          setGroupName('');
+  1414	                        }}
+  1415	                        type="button"
+  1416	                      >
+  1417	                        취소
+  1418	                      </button>
+  1419	                    )}
+  1420	                  </div>
+  1421	                  {groupActionError && (
+  1422	                    <p style={{ color: 'var(--color-error)' }}>
+  1423	                      {groupActionError}
+  1424	                    </p>
+  1425	                  )}
+  1426	                  {isLoadingGroups ? (
+  1427	                    <p style={{ color: 'var(--text-secondary)' }}>
+  1428	                      그룹을 불러오는 중...
+  1429	                    </p>
+  1430	                  ) : null}
+  1431	
+  1432	                  <div className="flex gap-2 flex-wrap">
+  1433	                    {subscriberGroups.length === 0 ? (
+  1434	                      <span
+  1435	                        style={{
+  1436	                          color: 'var(--text-secondary)',
+  1437	                          fontSize: 'var(--font-sm)',
+  1438	                        }}
+  1439	                      >
+  1440	                        등록된 그룹이 없습니다.
+  1441	                      </span>
+  1442	                    ) : (
+  1443	                      subscriberGroups.map((g) => (
+  1444	                        <div
+  1445	                          key={g.id}
+  1446	                          className="badge badge-neutral flex gap-2 items-center"
+  1447	                          data-testid={`subscriber-group-${g.id}`}
+  1448	                        >
+  1449	                          {g.name}
+  1450	                          <button
+  1451	                            aria-label={`${g.name} 그룹 수정`}
+  1452	                            style={{
+  1453	                              background: 'transparent',
+  1454	                              border: 'none',
+  1455	                              cursor: 'pointer',
+  1456	                              padding: 0,
+  1457	                            }}
+  1458	                            onClick={() => {
+  1459	                              setEditingGroupId(g.id);
+  1460	                              setGroupName(g.name);
+  1461	                            }}
+  1462	                            type="button"
+  1463	                          >
+  1464	                            ✏️
+  1465	                          </button>
+  1466	                          <button
+  1467	                            aria-label={`${g.name} 그룹 삭제`}
+  1468	                            style={{
+  1469	                              background: 'transparent',
+  1470	                              border: 'none',
+  1471	                              cursor: 'pointer',
+  1472	                              padding: 0,
+  1473	                              color: 'var(--color-error)',
+  1474	                            }}
+  1475	                            onClick={() => deleteGroup(g.id)}
+  1476	                            type="button"
+  1477	                          >
+  1478	                            ✕
+  1479	                          </button>
+  1480	                        </div>
+  1481	                      ))
+  1482	                    )}
+  1483	                  </div>
+  1484	                </div>
+  1485	              </div>
+  1486	
+  1487	              <div className="card">
+  1488	                <div className="card-header">
+  1489	                  <div
+  1490	                    className="tabs"
+  1491	                    style={{
+  1492	                      marginBottom: 0,
+  1493	                      borderBottom: 'none',
+  1494	                      gap: '1rem',
+  1495	                    }}
+  1496	                  >
+  1497	                    <button
+  1498	                      className={`tab ${subscriberTab === 'all' ? 'active' : ''}`}
+  1499	                      onClick={() => setSubscriberTab('all')}
+  1500	                    >
+  1501	                      전체 (All)
+  1502	                    </button>
+  1503	                    <button
+  1504	                      className={`tab ${subscriberTab === 'eligible' ? 'active' : ''}`}
+  1505	                      onClick={() => setSubscriberTab('eligible')}
+  1506	                    >
+  1507	                      발송 가능 (Eligible)
+  1508	                    </button>
+  1509	                    <button
+  1510	                      className={`tab ${subscriberTab === 'unsubscribed' ? 'active' : ''}`}
+  1511	                      onClick={() => setSubscriberTab('unsubscribed')}
+  1512	                    >
+  1513	                      수신 거부 (Unsubscribed)
+  1514	                    </button>
+  1515	                    <button
+  1516	                      className={`tab ${subscriberTab === 'suppressed' ? 'active' : ''}`}
+  1517	                      onClick={() => setSubscriberTab('suppressed')}
+  1518	                    >
+  1519	                      억제됨 (Suppressed)
+  1520	                    </button>
+  1521	                  </div>
+  1522	                  <div>
+  1523	                    <button
+  1524	                      className="btn btn-danger btn-sm"
+  1525	                      disabled
+  1526	                      title="백엔드 삭제 기능 미지원"
+  1527	                    >
+  1528	                      선택 삭제
+  1529	                    </button>
+  1530	                  </div>
+  1531	                </div>
+  1532	                {subscriberActionError && (
+  1533	                  <p style={{ color: 'var(--color-error)' }}>
+  1534	                    {subscriberActionError}
+  1535	                  </p>
+  1536	                )}
+  1537	                <div className="data-table-wrapper">
+  1538	                  <table className="data-table" data-testid="subscriber-list">
+  1539	                    <thead>
+  1540	                      <tr>
+  1541	                        <th style={{ width: '40px' }}>
+  1542	                          <input
+  1543	                            type="checkbox"
+  1544	                            disabled
+  1545	                            title="선택 기능 미지원"
+  1546	                          />
+  1547	                        </th>
+  1548	                        <th>이메일 / 이름</th>
+  1549	                        <th>상태</th>
+  1550	                        <th>최근 동기화</th>
+  1551	                        <th>액션</th>
+  1552	                      </tr>
+  1553	                    </thead>
+  1554	                    <tbody>
+  1555	                      {isLoadingSubscribers && (
+  1556	                        <tr>
+  1557	                          <td
+  1558	                            colSpan={5}
+  1559	                            className="text-center"
+  1560	                            style={{ padding: '2rem' }}
+  1561	                          >
+  1562	                            로딩 중...
+  1563	                          </td>
+  1564	                        </tr>
+  1565	                      )}
+  1566	                      {!isLoadingSubscribers &&
+  1567	                        filteredSubscribers.length === 0 && (
+  1568	                          <tr>
+  1569	                            <td
+  1570	                              colSpan={5}
+  1571	                              className="text-center"
+  1572	                              style={{ padding: '2rem' }}
+  1573	                            >
+  1574	                              데이터가 없습니다.
+  1575	                            </td>
+  1576	                          </tr>
+  1577	                        )}
+  1578	                      {filteredSubscribers.map((s) => (
+  1579	                        <tr key={s.id} data-testid={`subscriber-${s.email}`}>
+  1580	                          <td>
+  1581	                            <input type="checkbox" disabled />
+  1582	                          </td>
+  1583	                          <td>
+  1584	                            <div style={{ fontWeight: 600 }}>{s.email}</div>
+  1585	                            <div
+  1586	                              style={{
+  1587	                                fontSize: 'var(--font-xs)',
+  1588	                                color: 'var(--text-secondary)',
+  1589	                              }}
+  1590	                            >
+  1591	                              {s.displayName || '-'}
+  1592	                            </div>
+  1593	                          </td>
+  1594	                          <td>
+  1595	                            <div className="flex gap-2">
+  1596	                              {s.eligible && !s.isUnsubscribed ? (
+  1597	                                <span className="badge badge-success">
+  1598	                                  발송 가능
+  1599	                                </span>
+  1600	                              ) : null}
+  1601	                              {s.isUnsubscribed ? (
+  1602	                                <span className="badge badge-warning">
+  1603	                                  수신 거부
+  1604	                                </span>
+  1605	                              ) : null}
+  1606	                              {s.suppressionReasons.length > 0 ? (
+  1607	                                <span className="badge badge-error">
+  1608	                                  억제됨 ({s.suppressionReasons.join(',')})
+  1609	                                </span>
+  1610	                              ) : null}
+  1611	                              {!s.eligible &&
+  1612	                              !s.isUnsubscribed &&
+  1613	                              s.suppressionReasons.length === 0 ? (
+  1614	                                <span className="badge badge-neutral">
+  1615	                                  {s.eligibilityReason || '불가'}
+  1616	                                </span>
+  1617	                              ) : null}
+  1618	                              {s.groups && s.groups.length > 0
+  1619	                                ? s.groups.map((g) => (
+  1620	                                    <span
+  1621	                                      key={g.id}
+  1622	                                      className="badge badge-info"
+  1623	                                    >
+  1624	                                      {g.name}
+  1625	                                    </span>
+  1626	                                  ))
+  1627	                                : null}
+  1628	                            </div>
+  1629	                          </td>
+  1630	                          <td>
+  1631	                            {s.lastSyncedAt
+  1632	                              ? new Date(s.lastSyncedAt).toLocaleString()
+  1633	                              : '없음'}
+  1634	                          </td>
+  1635	                          <td>
+  1636	                            <div className="flex gap-2">
+  1637	                              <button
+  1638	                                className="btn btn-secondary btn-sm"
+  1639	                                onClick={() =>
+  1640	                                  void toggleSubscriberUnsubscribed(s)
+  1641	                                }
+  1642	                              >
+  1643	                                {s.isUnsubscribed
+  1644	                                  ? '재구독 처리'
+  1645	                                  : '수신거부 처리'}
+  1646	                              </button>
+  1647	                              <button
+  1648	                                className="btn btn-secondary btn-sm"
+  1649	                                onClick={() => void addHardBounceSuppression(s)}
+  1650	                              >
+  1651	                                하드바운스 처리
+  1652	                              </button>
+  1653	                              <button
+  1654	                                className="btn btn-secondary btn-sm"
+  1655	                                onClick={() => startEditingSubscriber(s)}
+  1656	                              >
+  1657	                                정보 수정
+  1658	                              </button>
+  1659	                              <button
+  1660	                                className="btn btn-danger btn-sm"
+  1661	                                onClick={() => void deleteSubscriber(s.id)}
+  1662	                                type="button"
+  1663	                              >
+  1664	                                삭제
+  1665	                              </button>
+  1666	                            </div>
+  1667	                          </td>
+  1668	                        </tr>
+  1669	                      ))}
+  1670	                    </tbody>
+  1671	                  </table>
+  1672	                </div>
+  1673	              </div>
+  1674	
+  1675	              <div className="grid grid-cols-2">
+  1676	                <div className="card" id="add-subscriber-form">
+  1677	                  <div className="card-header">
+  1678	                    <h3 className="card-title">
+  1679	                      {editingSubscriber
+  1680	                        ? '구독자 정보 수정'
+  1681	                        : '신규 구독자 추가'}
+  1682	                    </h3>
+  1683	                  </div>
+  1684	                  <div className="card-body">
+  1685	                    <form
+  1686	                      onSubmit={(e) => {
+  1687	                        e.preventDefault();
+  1688	                        void createSubscriber();
+  1689	                      }}
+  1690	                    >
+  1691	                      <div className="form-group">
+  1692	                        <label>이메일</label>
+  1693	                        <input
+  1694	                          data-testid="subscriber-email-input"
+  1695	                          value={subscriberEmail}
+  1696	                          onChange={(e) => setSubscriberEmail(e.target.value)}
+  1697	                          type="email"
+  1698	                          required
+  1699	                        />
+  1700	                      </div>
+  1701	                      <div className="form-group">
+  1702	                        <label>이름 (표시명)</label>
+  1703	                        <input
+  1704	                          data-testid="subscriber-display-name-input"
+  1705	                          value={subscriberDisplayName}
+  1706	                          onChange={(e) =>
+  1707	                            setSubscriberDisplayName(e.target.value)
+  1708	                          }
+  1709	                        />
+  1710	                      </div>
+  1711	                      {editingSubscriber && subscriberGroups.length > 0 && (
+  1712	                        <div className="form-group">
+  1713	                          <label>소속 그룹</label>
+  1714	                          <div
+  1715	                            className="flex flex-col gap-2"
+  1716	                            style={{
+  1717	                              maxHeight: '150px',
+  1718	                              overflowY: 'auto',
+  1719	                              padding: '0.5rem',
+  1720	                              border: '1px solid var(--border-light)',
+  1721	                              borderRadius: '4px',
+  1722	                            }}
+  1723	                          >
+  1724	                            {subscriberGroups.map((g) => (
+  1725	                              <label
+  1726	                                key={g.id}
+  1727	                                className="flex gap-2 items-center"
+  1728	                                style={{ margin: 0, fontWeight: 'normal' }}
+  1729	                              >
+  1730	                                <input
+  1731	                                  aria-label={`${g.name} 그룹 선택`}
+  1732	                                  type="checkbox"
+  1733	                                  checked={subscriberGroupIds.includes(g.id)}
+  1734	                                  onChange={(e) => {
+  1735	                                    if (e.target.checked) {
+  1736	                                      setSubscriberGroupIds([
+  1737	                                        ...subscriberGroupIds,
+  1738	                                        g.id,
+  1739	                                      ]);
+  1740	                                    } else {
+  1741	                                      setSubscriberGroupIds(
+  1742	                                        subscriberGroupIds.filter(
+  1743	                                          (id) => id !== g.id,
+  1744	                                        ),
+  1745	                                      );
+  1746	                                    }
+  1747	                                  }}
+  1748	                                />
+  1749	                                {g.name}
+  1750	                              </label>

@@ -1,25 +1,18 @@
 import { Hono } from 'hono';
+import { createUlid } from '@supermailer/contracts';
 
 import type { ManagementConsoleAppContext } from '../app-context';
 import type { AppVariables } from '../app-types';
 import { requireApiKey } from '../auth';
 import {
-  enqueueCampaignSend,
   enqueueIndividualSend,
+  enqueueRawEmlSend,
 } from '../services/send-enqueue';
-import { getSubscriberEligibility } from '../services/subscriber-eligibility';
-import { runSubscriberSync } from '../services/subscriber-sync';
 
-const toStringRecord = (value: unknown): Record<string, string> | undefined => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return undefined;
-  }
+const parseIsoDate = (value: string): Date | null => {
+  const parsed = new Date(value);
 
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>).filter(
-      ([, entryValue]) => typeof entryValue === 'string',
-    ),
-  ) as Record<string, string>;
+  return Number.isNaN(parsed.valueOf()) ? null : parsed;
 };
 
 export const createExternalApiRouter = (
@@ -28,60 +21,205 @@ export const createExternalApiRouter = (
   const router = new Hono<{ Variables: AppVariables }>();
 
   router.post(
-    '/subscriber-syncs',
-    requireApiKey(appContext, 'subscriber-sync'),
+    '/callback-endpoints',
+    requireApiKey(appContext, 'individual-send'),
     async (context) => {
       const body = (await context.req.json().catch(() => null)) as {
-        source?: unknown;
-        sourceKey?: unknown;
-        endpointUrl?: unknown;
-        headers?: unknown;
+        label?: unknown;
+        targetUrl?: unknown;
       } | null;
+      const label = typeof body?.label === 'string' ? body.label.trim() : '';
+      const targetUrl =
+        typeof body?.targetUrl === 'string' ? body.targetUrl.trim() : '';
+      const apiKey = context.get('apiKey');
 
-      const sourceKey =
-        typeof body?.sourceKey === 'string'
-          ? body.sourceKey
-          : typeof body?.source === 'string'
-            ? body.source
-            : '';
-      const endpointUrl =
-        typeof body?.endpointUrl === 'string' ? body.endpointUrl : '';
-
-      if (!endpointUrl.trim()) {
+      if (!label || !targetUrl) {
         return context.json(
-          { status: 'accepted', scope: 'subscriber-sync', sourceKey },
-          202,
+          {
+            code: 'validation_error',
+            message: 'label and targetUrl are required',
+          },
+          400,
         );
       }
 
-      const result = await runSubscriberSync(appContext, {
-        sourceKey,
-        endpointUrl,
-        headers: toStringRecord(body?.headers),
+      const endpoint = await appContext.repositories.callbackEndpoints.create({
+        id: createUlid(),
+        apiKeyId: apiKey.id,
+        label,
+        targetUrl,
+        signingSecret: createUlid(),
       });
 
       return context.json(
-        { status: 'completed', scope: 'subscriber-sync', data: result },
+        {
+          data: {
+            id: endpoint.id,
+            label: endpoint.label,
+            targetUrl: endpoint.targetUrl,
+            isActive: endpoint.isActive,
+            createdAt: endpoint.createdAt,
+            updatedAt: endpoint.updatedAt,
+          },
+        },
         201,
       );
     },
   );
 
   router.get(
-    '/subscriber-eligibility',
-    requireApiKey(appContext, 'subscriber-sync'),
+    '/callback-endpoints',
+    requireApiKey(appContext, 'individual-send'),
     async (context) => {
-      const email = context.req.query('email') ?? '';
+      const apiKey = context.get('apiKey');
+      const endpoints =
+        await appContext.repositories.callbackEndpoints.listByApiKeyId(
+          apiKey.id,
+        );
 
-      if (!email.trim()) {
+      return context.json({
+        data: endpoints.map((endpoint) => ({
+          id: endpoint.id,
+          label: endpoint.label,
+          targetUrl: endpoint.targetUrl,
+          isActive: endpoint.isActive,
+          createdAt: endpoint.createdAt,
+          updatedAt: endpoint.updatedAt,
+        })),
+      });
+    },
+  );
+
+  router.post(
+    '/sends',
+    requireApiKey(appContext, 'individual-send'),
+    async (context) => {
+      const body = (await context.req.json().catch(() => null)) as {
+        eml?: unknown;
+        callbackEndpointId?: unknown;
+      } | null;
+      const apiKey = context.get('apiKey');
+      const eml = typeof body?.eml === 'string' ? body.eml : '';
+      const callbackEndpointId =
+        typeof body?.callbackEndpointId === 'string'
+          ? body.callbackEndpointId
+          : null;
+
+      if (!eml.trim()) {
         return context.json(
-          { code: 'validation_error', message: 'email is required' },
+          {
+            code: 'validation_error',
+            message: 'eml is required',
+          },
           400,
         );
       }
 
+      let callbackEndpoint: {
+        id: string;
+        targetUrl: string;
+        signingSecret: string;
+      } | null = null;
+
+      if (callbackEndpointId) {
+        const endpoint =
+          await appContext.repositories.callbackEndpoints.findByIdForApiKey(
+            callbackEndpointId,
+            apiKey.id,
+          );
+
+        if (!endpoint || !endpoint.isActive) {
+          return context.json(
+            {
+              code: 'validation_error',
+              message: 'callbackEndpointId is invalid',
+            },
+            400,
+          );
+        }
+
+        callbackEndpoint = {
+          id: endpoint.id,
+          targetUrl: endpoint.targetUrl,
+          signingSecret: endpoint.signingSecret,
+        };
+      }
+
+      try {
+        const result = await enqueueRawEmlSend(
+          appContext,
+          {
+            enqueueSend: appContext.sendDispatchEnqueuer.enqueueSend,
+          },
+          {
+            eml,
+            apiKeyId: apiKey.id,
+            callbackEndpoint: callbackEndpoint ?? undefined,
+          },
+        );
+
+        return context.json(
+          {
+            status: result.status,
+            scope: 'send',
+            sendId: result.sendId,
+            queueJobId: result.queueJobId,
+            recipient: result.recipient,
+            callbackEndpointId: result.callbackEndpointId,
+          },
+          202,
+        );
+      } catch (error) {
+        return context.json(
+          {
+            code: 'validation_error',
+            message: error instanceof Error ? error.message : 'Invalid request',
+          },
+          400,
+        );
+      }
+    },
+  );
+
+  router.get(
+    '/send-results',
+    requireApiKey(appContext, 'individual-send'),
+    async (context) => {
+      const updatedSinceRaw = context.req.query('updatedSince') ?? '';
+      const parsed = parseIsoDate(updatedSinceRaw);
+      const apiKey = context.get('apiKey');
+      const limitRaw = context.req.query('limit');
+      const limit =
+        typeof limitRaw === 'string' && limitRaw.trim()
+          ? Math.max(1, Math.min(Number.parseInt(limitRaw, 10) || 100, 500))
+          : 100;
+
+      if (!parsed) {
+        return context.json(
+          {
+            code: 'validation_error',
+            message: 'updatedSince must be a valid ISO date',
+          },
+          400,
+        );
+      }
+
+      const records =
+        await appContext.repositories.sends.listResultsUpdatedSince({
+          updatedSince: parsed,
+          limit,
+          apiKeyId: apiKey.id,
+        });
+
       return context.json({
-        data: { email, ...(await getSubscriberEligibility(appContext, email)) },
+        data: records.map((record) => ({
+          sendId: record.id,
+          kind: record.kind,
+          recipientEmail: record.recipientEmail,
+          status: record.status,
+          callbackEndpointId: record.callbackEndpointId,
+          updatedAt: record.updatedAt,
+        })),
       });
     },
   );
@@ -90,13 +228,12 @@ export const createExternalApiRouter = (
     '/individual-sends',
     requireApiKey(appContext, 'individual-send'),
     async (context) => {
+      const apiKey = context.get('apiKey');
       const body = (await context.req.json().catch(() => null)) as {
         to?: unknown;
-        templateId?: unknown;
         subject?: unknown;
         html?: unknown;
         text?: unknown;
-        variables?: unknown;
         webhookUrl?: unknown;
         webhookSigningSecret?: unknown;
       } | null;
@@ -118,15 +255,11 @@ export const createExternalApiRouter = (
           },
           {
             to,
-            templateId:
-              typeof body?.templateId === 'string'
-                ? body.templateId
-                : undefined,
+            apiKeyId: apiKey.id,
             subject:
               typeof body?.subject === 'string' ? body.subject : undefined,
             html: typeof body?.html === 'string' ? body.html : undefined,
             text: typeof body?.text === 'string' ? body.text : undefined,
-            variables: toStringRecord(body?.variables),
             webhookUrl:
               typeof body?.webhookUrl === 'string'
                 ? body.webhookUrl
@@ -145,73 +278,8 @@ export const createExternalApiRouter = (
             sendId: result.sendId,
             queueJobId: result.queueJobId,
             recipient: result.recipient,
-            skippedReason: result.skippedReason,
             webhook: result.webhook,
           },
-          202,
-        );
-      } catch (error) {
-        return context.json(
-          {
-            code: 'validation_error',
-            message: error instanceof Error ? error.message : 'Invalid request',
-          },
-          400,
-        );
-      }
-    },
-  );
-
-  router.post(
-    '/campaign-sends',
-    requireApiKey(appContext, 'campaign-send'),
-    async (context) => {
-      const body = (await context.req.json().catch(() => null)) as {
-        campaignId?: unknown;
-        templateId?: unknown;
-        subject?: unknown;
-        html?: unknown;
-        text?: unknown;
-        variables?: unknown;
-        recipients?: unknown;
-        groupIds?: unknown;
-      } | null;
-
-      try {
-        const result = await enqueueCampaignSend(
-          appContext,
-          {
-            enqueueSend: appContext.sendDispatchEnqueuer.enqueueSend,
-          },
-          {
-            campaignId:
-              typeof body?.campaignId === 'string'
-                ? body.campaignId
-                : undefined,
-            templateId:
-              typeof body?.templateId === 'string'
-                ? body.templateId
-                : undefined,
-            subject:
-              typeof body?.subject === 'string' ? body.subject : undefined,
-            html: typeof body?.html === 'string' ? body.html : undefined,
-            text: typeof body?.text === 'string' ? body.text : undefined,
-            variables: toStringRecord(body?.variables),
-            recipients: Array.isArray(body?.recipients)
-              ? body.recipients.filter(
-                  (value): value is string => typeof value === 'string',
-                )
-              : [],
-            groupIds: Array.isArray(body?.groupIds)
-              ? body.groupIds.filter(
-                  (value): value is string => typeof value === 'string',
-                )
-              : [],
-          },
-        );
-
-        return context.json(
-          { status: result.status, scope: 'campaign-send', data: result },
           202,
         );
       } catch (error) {

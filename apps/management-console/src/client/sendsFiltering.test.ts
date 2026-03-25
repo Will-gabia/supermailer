@@ -84,7 +84,7 @@ describe('filterSends', () => {
         recipientQuery: '',
         provenanceFilter: 'manual',
       }).map((send) => send.id),
-    ).toEqual(['manual-1', 'mixed-1']);
+    ).toEqual(['individual-1', 'manual-1', 'mixed-1']);
   });
 
   it('returns only campaign sends with group provenance for group filter', () => {

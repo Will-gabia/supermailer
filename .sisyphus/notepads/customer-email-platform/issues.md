@@ -45,3 +45,47 @@
 - 2026-03-23: README drifted from `OPERATIONS.md` by showing `compose.production.yml` startup without `--env-file .env.production`, which could mislead operators into a failing production bring-up path.
 - 2026-03-23: E2E command wording had drifted across docs (`pnpm e2e` vs `pnpm playwright test`), which made the same verification step look like two different workflows even though the repo already exposes a single root script.
 - 2026-03-23: README and OPERATIONS had partially aligned production commands but still differed in how explicitly they described `build`, `up`, and `ps` order, which could make operator runbooks look inconsistent even when they targeted the same compose file.
+- 2026-03-23: `e2e/send-flows.spec.ts` drifted after the subscriber page moved to a group-first layout; the test still searched for the old labeled group-creation controls (`새 그룹 이름`, `그룹 추가`) while the live UI exposed placeholder-based input plus an exact `추가` button.
+- 2026-03-23: Moving the product boundary to send-only left a large amount of subscriber/template/campaign-era UI and E2E coverage behind; the main cleanup risk was not type errors but half-removed flows that still compiled while contradicting the supported product.
+- 2026-03-23: The existing webhook delivery ledger was send-instance-based, so adding pre-registered callback endpoints required a separate registration model instead of overloading the old per-send `webhookUrl` behavior.
+- 2026-03-23: API-key query-state behavior normalized away the redundant `scope=individual-send` query because only one supported scope remains, so tests needed to assert restored checked state rather than literal URL preservation.
+- 2026-03-23: Final E2E verification after the client-doc additions initially failed for an environmental reason, not a code regression: local repo dev servers were already listening on `:3000` and `:4173`, which prevented Playwright from starting its own managed web servers.
+- 2026-03-24: Admin send history originally loaded the entire send table into the browser and filtered locally, which became the first practical bottleneck once the product boundary shifted to a send-engine with growing history volume.
+- 2026-03-24: Raw EML support required a cross-layer addition (`eml_snapshot`) rather than a pure API swap, because the worker and SMTP transport previously assumed all sends could be reconstructed from `subject/html/text` snapshots.
+
+## 2026-03-24 — stale mixed contract wording after raw EML rollout
+
+- After the raw EML implementation landed, `external-api.ts` still accepted the legacy rendered-send fallback and some docs still advertised that mixed contract.
+- This created a drift risk where clients could rely on deprecated request fields even though the intended product boundary had already moved to raw EML-only sends.
+- Fixed by removing the fallback path, tightening the validation message to `eml is required`, and updating README/INSTALL/OPERATIONS contract language to match the shipped UI/API behavior.
+
+## 2026-03-24 — operator docs lagged behind shipped send-console behavior
+
+- Public API docs were mostly aligned, but top-level/operator docs still described the product too generically and underreported the current admin workflow.
+- This created a mismatch where readers could see the right curl examples but still miss that `/sends` is a search/pagination-first history screen and that routing/reporting tabs move between sections.
+- Fixed by tightening README/INSTALL/OPERATIONS wording around EML-only sends, paginated send history, SMTP node operations, and routing/reporting tab navigation.
+
+## 2026-03-24 — hard delete semantics conflicted with SMTP history references
+
+- The original SMTP node delete request conflicted with existing foreign-key references from `sends` and `send_dispatch_attempts`, so removing the route guard alone would have left a broken persistence model.
+- Fixed by adding `deleted_at` tombstones, keeping latest-routing-rule protection, and excluding tombstoned nodes from live routing/admin lists while preserving historical references.
+
+## 2026-03-24 — Playwright reused stale dev servers during API-key revoke verification
+
+- Browser verification initially failed because Playwright reused older local dev servers on ports 3000/4173, so the running app did not include the new revoke route even though integration tests were green.
+- Resolved by restarting the stale processes and rerunning the full suite on a fresh server instance.
+
+## 2026-03-24 — reused Playwright dev servers can hide new admin routes
+
+- The API key delete implementation initially appeared broken in browser tests because Playwright reused an older local dev server that did not include the new `DELETE /api/api-keys/:id` route.
+- The actual code path was validated by integration tests; restarting the stale app servers was necessary so the e2e run exercised the current server build.
+
+## 2026-03-24 — revoked API key delete Request failed was stale-server drift, not route logic
+
+- Reproduced the revoke → delete flow directly against a fresh management-console dev server: `POST /api/api-keys/:id/revoke` returned 200, `DELETE /api/api-keys/:id` returned 204, and the deleted key no longer appeared in `/api/api-keys`.
+- The earlier `Request failed` symptom came from running against an older reused dev server process that did not include the latest admin API routes.
+
+## 2026-03-24 — routing failover UI can silently degrade if admin parser drops chain fields
+
+- The routing UI sent `failoverNodeIds`, but the admin route initially ignored that field, causing preview/save behavior to collapse back to single-node routing even though repository and worker support were present.
+- Fixed by forwarding `failoverNodeIds` from `POST /api/routing-rules` into the repository `createRuleset` call and verifying the browser preview shows the full ordered chain.

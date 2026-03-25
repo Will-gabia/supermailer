@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   boolean,
   index,
@@ -124,6 +125,7 @@ export const sendSmtpNodes = pgTable(
     username: text('username'),
     passwordSecretRef: text('password_secret_ref'),
     isActive: boolean('is_active').notNull().default(true),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
     priority: integer('priority').notNull().default(100),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
@@ -132,7 +134,11 @@ export const sendSmtpNodes = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (table) => [uniqueIndex('send_smtp_nodes_name_idx').on(table.name)],
+  (table) => [
+    uniqueIndex('send_smtp_nodes_name_idx')
+      .on(table.name)
+      .where(sql`${table.deletedAt} is null`),
+  ],
 );
 
 export const routingRules = pgTable(
@@ -161,6 +167,53 @@ export const routingRules = pgTable(
   ],
 );
 
+export const routingRuleFailoverNodes = pgTable(
+  'routing_rule_failover_nodes',
+  {
+    id: text('id').primaryKey(),
+    routingRuleId: text('routing_rule_id')
+      .notNull()
+      .references(() => routingRules.id),
+    sendSmtpNodeId: text('send_smtp_node_id')
+      .notNull()
+      .references(() => sendSmtpNodes.id),
+    position: integer('position').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('routing_rule_failover_nodes_rule_position_idx').on(
+      table.routingRuleId,
+      table.position,
+    ),
+    index('routing_rule_failover_nodes_rule_idx').on(table.routingRuleId),
+    index('routing_rule_failover_nodes_node_idx').on(table.sendSmtpNodeId),
+  ],
+);
+
+export const callbackEndpoints = pgTable(
+  'callback_endpoints',
+  {
+    id: text('id').primaryKey(),
+    apiKeyId: text('api_key_id').notNull(),
+    label: text('label').notNull(),
+    targetUrl: text('target_url').notNull(),
+    signingSecret: text('signing_secret').notNull(),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index('callback_endpoints_api_key_id_idx').on(table.apiKeyId),
+    index('callback_endpoints_active_idx').on(table.isActive),
+  ],
+);
+
 export const sends = pgTable(
   'sends',
   {
@@ -170,12 +223,15 @@ export const sends = pgTable(
     subjectSnapshot: text('subject_snapshot').notNull(),
     htmlSnapshot: text('html_snapshot').notNull(),
     textSnapshot: text('text_snapshot'),
+    emlSnapshot: text('eml_snapshot'),
     audienceProvenance: jsonb('audience_provenance').$type<{
       manual: boolean;
       groups: Array<{ id: string; name: string }>;
     } | null>(),
     status: text('status').notNull(),
+    apiKeyId: text('api_key_id'),
     templateId: text('template_id').references(() => templates.id),
+    callbackEndpointId: text('callback_endpoint_id'),
     routingRuleVersion: integer('routing_rule_version'),
     sendSmtpNodeId: text('send_smtp_node_id').references(
       () => sendSmtpNodes.id,
@@ -197,7 +253,11 @@ export const sends = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (table) => [uniqueIndex('sends_queue_job_id_idx').on(table.queueJobId)],
+  (table) => [
+    uniqueIndex('sends_queue_job_id_idx').on(table.queueJobId),
+    index('sends_api_key_id_idx').on(table.apiKeyId),
+    index('sends_callback_endpoint_id_idx').on(table.callbackEndpointId),
+  ],
 );
 
 export const sendDispatchAttempts = pgTable(
@@ -424,6 +484,8 @@ export const schema = {
   templates,
   sendSmtpNodes,
   routingRules,
+  routingRuleFailoverNodes,
+  callbackEndpoints,
   sends,
   sendDispatchAttempts,
   deliveryEvents,

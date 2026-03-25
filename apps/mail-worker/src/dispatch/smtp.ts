@@ -167,12 +167,13 @@ const sendSmtpCommand = (
 
 export const createSmtpDispatchTransport = (): DispatchTransport => ({
   dispatch: async (request) => {
+    const message = request.eml ?? composeMessage(request);
     const smtpEnvelope = [
       `EHLO supermailer.local`,
       `MAIL FROM:<supermailer@${request.smtpNode.host}>`,
       `RCPT TO:<${request.recipientEmail}>`,
       'DATA',
-      composeMessage(request),
+      message,
       '.',
       'QUIT',
     ].join('\r\n');

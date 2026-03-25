@@ -10,7 +10,7 @@ test('delivery reporting and event history display correctly', async ({
   await page.getByLabel('이메일').fill('admin@supermailer.local');
   await page.getByLabel('비밀번호').fill('supermailer-admin');
   await page.getByRole('button', { name: '로그인' }).click();
-  await page.waitForURL('/subscribers');
+  await page.waitForURL('/sends');
 
   // Verify reporting page
   await page.getByRole('button', { name: /리포트/ }).click();
@@ -26,34 +26,57 @@ test('delivery reporting and event history display correctly', async ({
     page.locator('[data-testid="reporting-node-breakdown"]'),
   ).toBeVisible();
 
-  // Let's create a send and ingest a delivery event to make sure it shows up
-  const templateName = `event_flow_template_${createUniqueSuffix()}`;
-  const templateCreateResponse = await page.request.post('/api/templates', {
+  const recipient = `events-${createUniqueSuffix()}@example.com`;
+  const apiKeyResponse = await page.request.post('/api/api-keys', {
     data: {
-      name: templateName,
-      subject: 'Event test',
-      html: '<p>Test</p>',
+      label: `reporting-events-${createUniqueSuffix()}`,
+      scopes: ['individual-send'],
     },
   });
-  expect(templateCreateResponse.ok()).toBeTruthy();
-
-  const recipient = `events-${createUniqueSuffix()}@example.com`;
+  expect(apiKeyResponse.status()).toBe(201);
+  const apiKeyPayload = (await apiKeyResponse.json()) as {
+    data: { rawKey: string };
+  };
+  const callbackEndpointResponse = await page.request.post(
+    '/api/callback-endpoints',
+    {
+      headers: {
+        'x-api-key': apiKeyPayload.data.rawKey,
+      },
+      data: {
+        label: `reporting-events-webhook-${createUniqueSuffix()}`,
+        targetUrl: 'http://localhost:4010/webhooks/result',
+      },
+    },
+  );
+  expect(callbackEndpointResponse.status()).toBe(201);
+  const callbackEndpointPayload = (await callbackEndpointResponse.json()) as {
+    data: { id: string };
+  };
 
   await page.getByRole('button', { name: /발송 관리/ }).click();
   await page.waitForURL('/sends');
 
-  await page.selectOption('[data-testid="individual-send-template"]', {
-    label: templateName,
+  const sendResponse = await page.request.post('/api/sends', {
+    headers: {
+      'x-api-key': apiKeyPayload.data.rawKey,
+    },
+    data: {
+      eml: [
+        'From: sender@example.com',
+        `To: ${recipient}`,
+        'Subject: Event test',
+        'MIME-Version: 1.0',
+        'Content-Type: text/plain; charset=utf-8',
+        '',
+        'Event test body',
+      ].join('\r\n'),
+      callbackEndpointId: callbackEndpointPayload.data.id,
+    },
   });
-  await page.fill('[data-testid="individual-send-to"]', recipient);
-
-  const sendRequest = page.waitForResponse(
-    (response) =>
-      response.url().includes('/api/admin/individual-sends') &&
-      response.request().method() === 'POST',
-  );
-  await page.getByRole('button', { name: '개별 발송하기' }).click();
-  await sendRequest;
+  expect(sendResponse.status()).toBe(202);
+  await page.reload();
+  await page.getByTestId('send-recipient-search').fill(recipient);
 
   // Find the send in the list
   const sendList = page.locator('[data-testid="send-list"]');

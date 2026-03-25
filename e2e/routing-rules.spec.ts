@@ -5,7 +5,9 @@ test('creates routing nodes and rules, blocks missing fallback, and previews eff
 }) => {
   const suffix = Date.now().toString();
   const gmailNodeName = `smtp-gmail-${suffix}`;
+  const gmailFallbackNodeName = `smtp-gmail-fallback-${suffix}`;
   const defaultNodeName = `smtp-default-${suffix}`;
+  const removableNodeName = `smtp-removable-${suffix}`;
   const exactDomain = `gmail-${suffix}.example`;
 
   await page.goto('/routing');
@@ -15,7 +17,7 @@ test('creates routing nodes and rules, blocks missing fallback, and previews eff
   await page.getByLabel('비밀번호').fill('supermailer-admin');
   await page.getByRole('button', { name: '로그인' }).click();
 
-  await expect(page).toHaveURL(/\/subscribers$/);
+  await expect(page).toHaveURL(/\/sends$/);
   await page.getByRole('button', { name: /Routing/ }).click();
   await expect(page).toHaveURL(/\/routing$/);
 
@@ -40,6 +42,30 @@ test('creates routing nodes and rules, blocks missing fallback, and previews eff
   await page.getByRole('button', { name: '추가', exact: true }).click();
   await expect(page.getByTestId(`smtp-node-${defaultNodeName}`)).toBeVisible();
 
+  await page
+    .getByPlaceholder('이름 (예: main-node)')
+    .fill(gmailFallbackNodeName);
+  await page
+    .getByPlaceholder('호스트 (예: localhost)')
+    .fill('gmail-fallback.relay.internal');
+  await page.getByPlaceholder('포트').fill('2528');
+  await page.getByPlaceholder('우선순위').fill('15');
+  await page.getByRole('button', { name: '추가', exact: true }).click();
+  await expect(
+    page.getByTestId(`smtp-node-${gmailFallbackNodeName}`),
+  ).toBeVisible();
+
+  await page.getByPlaceholder('이름 (예: main-node)').fill(removableNodeName);
+  await page
+    .getByPlaceholder('호스트 (예: localhost)')
+    .fill('removable.relay.internal');
+  await page.getByPlaceholder('포트').fill('2527');
+  await page.getByPlaceholder('우선순위').fill('30');
+  await page.getByRole('button', { name: '추가', exact: true }).click();
+  await expect(
+    page.getByTestId(`smtp-node-${removableNodeName}`),
+  ).toBeVisible();
+
   await expect(page.getByTestId('smtp-node-list')).toContainText(gmailNodeName);
   await expect(page.getByTestId('smtp-node-list')).toContainText(
     defaultNodeName,
@@ -47,7 +73,8 @@ test('creates routing nodes and rules, blocks missing fallback, and previews eff
 
   const removeButtons = page
     .getByTestId('routing-rules-list')
-    .getByRole('button', { name: '삭제' });
+    .locator('[data-testid^="routing-rule-"] > div:first-child button')
+    .filter({ hasText: '삭제' });
   const existingRuleCount = await removeButtons.count();
   for (let index = 0; index < existingRuleCount; index += 1) {
     await removeButtons.first().click();
@@ -61,6 +88,9 @@ test('creates routing nodes and rules, blocks missing fallback, and previews eff
   await firstRule
     .getByTestId('routing-node-0')
     .selectOption({ label: gmailNodeName });
+  await firstRule
+    .getByTestId('routing-add-failover-0')
+    .selectOption({ label: gmailFallbackNodeName });
   await firstRule.getByTestId('routing-priority-0').fill('1');
 
   await page.getByRole('button', { name: '변경사항 저장' }).click();
@@ -92,7 +122,13 @@ test('creates routing nodes and rules, blocks missing fallback, and previews eff
     gmailNodeName,
   );
   await expect(page.getByTestId('route-preview-result')).toContainText(
-    '규칙: exact',
+    `1순위 (Primary) : ${gmailNodeName}`,
+  );
+  await expect(page.getByTestId('route-preview-result')).toContainText(
+    `2순위 (Fallback 1) : ${gmailFallbackNodeName}`,
+  );
+  await expect(page.getByTestId('route-preview-result')).toContainText(
+    `${exactDomain} 전용`,
   );
 
   await page.getByTestId('route-preview-input').fill('alice@example.com');
@@ -101,6 +137,16 @@ test('creates routing nodes and rules, blocks missing fallback, and previews eff
     defaultNodeName,
   );
   await expect(page.getByTestId('route-preview-result')).toContainText(
-    '규칙: default',
+    '기본 규칙',
+  );
+
+  await page.getByTestId(`smtp-node-delete-${defaultNodeName}`).click();
+  await expect(page.getByText('latest routing rules')).toBeVisible();
+  await expect(page.getByTestId(`smtp-node-${defaultNodeName}`)).toBeVisible();
+
+  await page.getByTestId(`smtp-node-delete-${removableNodeName}`).click();
+  await expect(page.getByText('노드가 삭제되었습니다.')).toBeVisible();
+  await expect(page.getByTestId(`smtp-node-${removableNodeName}`)).toHaveCount(
+    0,
   );
 });

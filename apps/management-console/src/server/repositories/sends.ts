@@ -1,7 +1,44 @@
-import { eq } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, ilike, lt, or } from 'drizzle-orm';
 
 import type { ManagementConsoleDatabase } from '../db';
 import { sends } from '../db/schema';
+
+const encodeAdminHistoryCursor = (input: { createdAt: Date; id: string }) =>
+  Buffer.from(
+    JSON.stringify({ createdAt: input.createdAt.toISOString(), id: input.id }),
+    'utf8',
+  ).toString('base64url');
+
+const decodeAdminHistoryCursor = (
+  cursor: string | null,
+): { createdAt: Date; id: string } | null => {
+  if (!cursor) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(cursor, 'base64url').toString('utf8'),
+    ) as { createdAt?: unknown; id?: unknown };
+
+    if (typeof parsed.createdAt !== 'string' || typeof parsed.id !== 'string') {
+      return null;
+    }
+
+    const createdAt = new Date(parsed.createdAt);
+
+    if (Number.isNaN(createdAt.getTime())) {
+      return null;
+    }
+
+    return {
+      createdAt,
+      id: parsed.id,
+    };
+  } catch {
+    return null;
+  }
+};
 
 export const createSendsRepository = (db: ManagementConsoleDatabase) => ({
   create: async (input: {
@@ -11,12 +48,15 @@ export const createSendsRepository = (db: ManagementConsoleDatabase) => ({
     subjectSnapshot: string;
     htmlSnapshot: string;
     textSnapshot?: string | null;
+    emlSnapshot?: string | null;
     audienceProvenance?: {
       manual: boolean;
       groups: Array<{ id: string; name: string }>;
     } | null;
     status: string;
+    apiKeyId?: string | null;
     templateId?: string | null;
+    callbackEndpointId?: string | null;
     routingRuleVersion?: number | null;
     sendSmtpNodeId?: string | null;
   }) => {
@@ -29,9 +69,12 @@ export const createSendsRepository = (db: ManagementConsoleDatabase) => ({
         subjectSnapshot: input.subjectSnapshot,
         htmlSnapshot: input.htmlSnapshot,
         textSnapshot: input.textSnapshot ?? null,
+        emlSnapshot: input.emlSnapshot ?? null,
         audienceProvenance: input.audienceProvenance ?? null,
         status: input.status,
+        apiKeyId: input.apiKeyId ?? null,
         templateId: input.templateId ?? null,
+        callbackEndpointId: input.callbackEndpointId ?? null,
         routingRuleVersion: input.routingRuleVersion ?? null,
         sendSmtpNodeId: input.sendSmtpNodeId ?? null,
       })
@@ -104,6 +147,76 @@ export const createSendsRepository = (db: ManagementConsoleDatabase) => ({
     return null;
   },
   list: async () => db.select().from(sends),
+  listAdminHistory: async (input: {
+    search: string;
+    limit: number;
+    cursor: string | null;
+  }) => {
+    const normalizedLimit = Math.max(1, Math.min(input.limit, 100));
+    const normalizedSearch = input.search.trim();
+    const cursor = decodeAdminHistoryCursor(input.cursor);
+
+    const filters = [
+      normalizedSearch
+        ? ilike(sends.recipientEmail, `%${normalizedSearch}%`)
+        : undefined,
+      cursor
+        ? or(
+            lt(sends.createdAt, cursor.createdAt),
+            and(eq(sends.createdAt, cursor.createdAt), lt(sends.id, cursor.id)),
+          )
+        : undefined,
+    ].filter((value): value is NonNullable<typeof value> => Boolean(value));
+
+    const records = await db
+      .select()
+      .from(sends)
+      .where(filters.length > 0 ? and(...filters) : undefined)
+      .orderBy(desc(sends.createdAt), desc(sends.id))
+      .limit(normalizedLimit + 1);
+
+    const hasMore = records.length > normalizedLimit;
+    const data = hasMore ? records.slice(0, normalizedLimit) : records;
+    const lastRecord = data.at(-1) ?? null;
+
+    return {
+      data,
+      pageInfo: {
+        limit: normalizedLimit,
+        hasMore,
+        nextCursor:
+          hasMore && lastRecord
+            ? encodeAdminHistoryCursor({
+                createdAt: lastRecord.createdAt,
+                id: lastRecord.id,
+              })
+            : null,
+      },
+    };
+  },
+  listResultsUpdatedSince: async (input: {
+    updatedSince: Date;
+    limit: number;
+    apiKeyId: string;
+  }) =>
+    db
+      .select({
+        id: sends.id,
+        kind: sends.kind,
+        recipientEmail: sends.recipientEmail,
+        status: sends.status,
+        updatedAt: sends.updatedAt,
+        callbackEndpointId: sends.callbackEndpointId,
+      })
+      .from(sends)
+      .where(
+        and(
+          eq(sends.apiKeyId, input.apiKeyId),
+          gt(sends.updatedAt, input.updatedSince),
+        ),
+      )
+      .orderBy(asc(sends.updatedAt), asc(sends.id))
+      .limit(input.limit),
   setQueueJobId: async (sendId: string, queueJobId: string) => {
     const [record] = await db
       .update(sends)

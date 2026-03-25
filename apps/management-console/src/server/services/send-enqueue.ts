@@ -4,24 +4,6 @@ import { createUlid, normalizeEmailAddress } from '@supermailer/contracts';
 
 import type { ManagementConsoleAppContext } from '../app-context';
 
-import { renderTemplate } from './template-preview';
-import { getSubscriberEligibility } from './subscriber-eligibility';
-
-const toObjectRecord = (value: unknown): Record<string, unknown> =>
-  value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-
-const toStringRecord = (value: unknown): Record<string, string> => {
-  const source = toObjectRecord(value);
-
-  return Object.fromEntries(
-    Object.entries(source).filter(
-      ([, entryValue]) => typeof entryValue === 'string',
-    ),
-  ) as Record<string, string>;
-};
-
 const createDeterministicSendId = (
   scopeSeed: string,
   recipientEmail: string,
@@ -43,179 +25,90 @@ const createDeterministicSigningSecret = (seed: string): string =>
 
 export type IndividualSendInput = {
   to: string;
-  templateId?: string;
+  apiKeyId?: string;
   subject?: string;
   html?: string;
   text?: string;
-  variables?: Record<string, string>;
+  callbackEndpoint?: {
+    id: string;
+    targetUrl: string;
+    signingSecret: string;
+  };
   webhookUrl?: string;
   webhookSigningSecret?: string;
 };
 
-export type CampaignEnqueueInput = {
-  campaignId?: string;
-  templateId?: string;
-  subject?: string;
-  html?: string;
-  text?: string;
-  variables?: Record<string, string>;
-  recipients: string[];
-  groupIds?: string[];
-};
-
-export type EnqueuedRecipient = {
-  email: string;
-  sendId: string;
-  queueJobId: string;
-  status: 'queued';
-};
-
-export type SkippedRecipient = {
-  email: string;
-  reason: 'unsubscribed' | 'hard_bounce_suppression';
-};
-
 export type IndividualSendResult = {
   sendId: string;
-  status: 'queued' | 'skipped';
-  queueJobId: string | null;
+  status: 'queued';
+  queueJobId: string;
   recipient: string;
-  skippedReason: 'unsubscribed' | 'hard_bounce_suppression' | null;
+  callbackEndpointId: string | null;
   webhook: {
     targetUrl: string;
     signingSecret: string;
   } | null;
 };
 
-export type CampaignEnqueueResult = {
-  campaignId: string;
-  status: 'accepted';
-  totals: {
-    requested: number;
-    queued: number;
-    skipped: number;
-  };
-  queued: EnqueuedRecipient[];
-  skipped: SkippedRecipient[];
-};
-
-type AudienceProvenance = {
-  manual: boolean;
-  groups: Array<{ id: string; name: string }>;
-};
-
-const normalizeGroupIds = (groupIds: string[] | undefined): string[] =>
-  Array.from(
-    new Set(
-      (Array.isArray(groupIds) ? groupIds : []).filter(
-        (groupId): groupId is string =>
-          typeof groupId === 'string' && groupId.trim().length > 0,
-      ),
-    ),
-  );
-
-const resolveCampaignAudience = async (
-  appContext: ManagementConsoleAppContext,
-  input: CampaignEnqueueInput,
-): Promise<Map<string, AudienceProvenance>> => {
-  const audience = new Map<string, AudienceProvenance>();
-  const directRecipients = Array.isArray(input.recipients)
-    ? input.recipients
-    : [];
-  const groupIds = normalizeGroupIds(input.groupIds);
-
-  const groupAudienceRows =
-    groupIds.length > 0
-      ? await appContext.repositories.subscriberGroupMemberships.listEmailsForGroupIds(
-          groupIds,
-        )
-      : [];
-
-  for (const email of directRecipients) {
-    const normalizedEmail = normalizeEmailAddress(email);
-    audience.set(normalizedEmail, {
-      manual: true,
-      groups: audience.get(normalizedEmail)?.groups ?? [],
-    });
-  }
-
-  for (const row of groupAudienceRows) {
-    const normalizedEmail = normalizeEmailAddress(row.email);
-    const current = audience.get(normalizedEmail) ?? {
-      manual: false,
-      groups: [],
-    };
-    const groups = current.groups.some((group) => group.id === row.groupId)
-      ? current.groups
-      : [...current.groups, { id: row.groupId, name: row.groupName }];
-
-    audience.set(normalizedEmail, {
-      manual: current.manual,
-      groups,
-    });
-  }
-
-  return audience;
-};
-
-type RenderedSnapshot = {
-  templateId: string | null;
+export type RenderedSendInput = {
+  to: string;
   subject: string;
   html: string;
-  text: string | null;
+  text?: string;
+  apiKeyId: string;
+  callbackEndpoint?: {
+    id: string;
+    targetUrl: string;
+    signingSecret: string;
+  };
 };
 
-const resolveRenderedSnapshot = async (
-  appContext: ManagementConsoleAppContext,
-  input: {
-    templateId?: string;
-    subject?: string;
-    html?: string;
-    text?: string;
-    variables?: Record<string, string>;
-  },
-): Promise<RenderedSnapshot> => {
-  if (input.templateId) {
-    const template = await appContext.repositories.templates.findById(
-      input.templateId,
-    );
+export type RenderedSendResult = {
+  sendId: string;
+  status: 'queued';
+  queueJobId: string;
+  recipient: string;
+  callbackEndpointId: string | null;
+};
 
-    if (!template) {
-      throw new Error('Template not found');
-    }
-
-    const variables = input.variables ?? {};
-
-    return {
-      templateId: template.id,
-      subject: renderTemplate(template.subject, variables),
-      html: renderTemplate(template.html, variables),
-      text: template.textContent
-        ? renderTemplate(template.textContent, variables)
-        : null,
-    };
-  }
-
-  const subject = typeof input.subject === 'string' ? input.subject.trim() : '';
-  const html = typeof input.html === 'string' ? input.html.trim() : '';
-
-  if (!subject || !html) {
-    throw new Error('Either templateId or raw subject/html is required');
-  }
-
-  return {
-    templateId: null,
-    subject,
-    html,
-    text:
-      typeof input.text === 'string' && input.text.trim()
-        ? input.text.trim()
-        : null,
+export type RawEmlSendInput = {
+  eml: string;
+  apiKeyId: string;
+  callbackEndpoint?: {
+    id: string;
+    targetUrl: string;
+    signingSecret: string;
   };
 };
 
 type EnqueueDependencies = {
   enqueueSend(sendId: string): Promise<{ jobId: string }>;
+};
+
+const parseRawEml = (
+  eml: string,
+): { recipientEmail: string; subject: string } => {
+  const normalizedEml = eml.trim();
+
+  if (!normalizedEml || !/(\r?\n){2}/.test(normalizedEml)) {
+    throw new Error('eml must contain headers and body');
+  }
+
+  const toHeader = normalizedEml.match(/^To:\s*(.+)$/im)?.[1]?.trim() ?? '';
+  const subjectHeader =
+    normalizedEml.match(/^Subject:\s*(.+)$/im)?.[1]?.trim() ?? '';
+  const recipientMatch = toHeader.match(
+    /([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/i,
+  );
+
+  if (!recipientMatch?.[1] || !subjectHeader) {
+    throw new Error('eml must include valid To and Subject headers');
+  }
+
+  return {
+    recipientEmail: normalizeEmailAddress(recipientMatch[1]),
+    subject: subjectHeader,
+  };
 };
 
 export const enqueueIndividualSend = async (
@@ -224,25 +117,19 @@ export const enqueueIndividualSend = async (
   input: IndividualSendInput,
 ): Promise<IndividualSendResult> => {
   const normalizedRecipient = normalizeEmailAddress(input.to);
-  const eligibility = await getSubscriberEligibility(
-    appContext,
-    normalizedRecipient,
-  );
-  const sendSeed = createUlid();
-  const sendId = createDeterministicSendId(sendSeed, normalizedRecipient);
+  const subject = typeof input.subject === 'string' ? input.subject.trim() : '';
+  const html = typeof input.html === 'string' ? input.html.trim() : '';
+  const text =
+    typeof input.text === 'string' && input.text.trim()
+      ? input.text.trim()
+      : null;
 
-  if (!eligibility.eligible && eligibility.reason) {
-    return {
-      sendId,
-      status: 'skipped',
-      queueJobId: null,
-      recipient: normalizedRecipient,
-      skippedReason: eligibility.reason,
-      webhook: null,
-    };
+  if (!subject || !html) {
+    throw new Error('subject and html are required');
   }
 
-  const snapshot = await resolveRenderedSnapshot(appContext, input);
+  const sendSeed = createUlid();
+  const sendId = createDeterministicSendId(sendSeed, normalizedRecipient);
   const route =
     await appContext.repositories.routingRules.findRouteForRecipient(
       normalizedRecipient,
@@ -252,11 +139,13 @@ export const enqueueIndividualSend = async (
     id: sendId,
     kind: 'individual',
     recipientEmail: normalizedRecipient,
-    subjectSnapshot: snapshot.subject,
-    htmlSnapshot: snapshot.html,
-    textSnapshot: snapshot.text,
+    subjectSnapshot: subject,
+    htmlSnapshot: html,
+    textSnapshot: text,
     status: 'queued',
-    templateId: snapshot.templateId,
+    apiKeyId: input.apiKeyId ?? null,
+    templateId: null,
+    callbackEndpointId: input.callbackEndpoint?.id ?? null,
     routingRuleVersion: route?.rule.version ?? null,
     sendSmtpNodeId: route?.node.id ?? null,
   });
@@ -265,15 +154,17 @@ export const enqueueIndividualSend = async (
   await appContext.repositories.sends.setQueueJobId(created.id, enqueued.jobId);
 
   const webhookUrl =
-    typeof input.webhookUrl === 'string' ? input.webhookUrl.trim() : '';
+    input.callbackEndpoint?.targetUrl ??
+    (typeof input.webhookUrl === 'string' ? input.webhookUrl.trim() : '');
   let webhook: { targetUrl: string; signingSecret: string } | null = null;
 
   if (webhookUrl) {
     const signingSecret =
-      typeof input.webhookSigningSecret === 'string' &&
+      input.callbackEndpoint?.signingSecret ??
+      (typeof input.webhookSigningSecret === 'string' &&
       input.webhookSigningSecret.trim()
         ? input.webhookSigningSecret.trim()
-        : createDeterministicSigningSecret(`${sendId}:${webhookUrl}`);
+        : createDeterministicSigningSecret(`${sendId}:${webhookUrl}`));
 
     await appContext.repositories.outboundWebhookDeliveries.create({
       id: createUlid(),
@@ -298,93 +189,128 @@ export const enqueueIndividualSend = async (
     status: 'queued',
     queueJobId: enqueued.jobId,
     recipient: normalizedRecipient,
-    skippedReason: null,
+    callbackEndpointId: input.callbackEndpoint?.id ?? null,
     webhook,
   };
 };
 
-export const enqueueCampaignSend = async (
+export const enqueueRenderedSend = async (
   appContext: ManagementConsoleAppContext,
   dependencies: EnqueueDependencies,
-  input: CampaignEnqueueInput,
-): Promise<CampaignEnqueueResult> => {
-  const campaignId =
-    (typeof input.campaignId === 'string' && input.campaignId.trim()) ||
-    createUlid();
-  const audience = await resolveCampaignAudience(appContext, input);
-  const normalizedRecipients = Array.from(audience.keys());
+  input: RenderedSendInput,
+): Promise<RenderedSendResult> => {
+  const normalizedRecipient = normalizeEmailAddress(input.to);
+  const subject = input.subject.trim();
+  const html = input.html.trim();
+  const text =
+    typeof input.text === 'string' && input.text.trim()
+      ? input.text.trim()
+      : null;
 
-  if (normalizedRecipients.length === 0) {
-    throw new Error('Campaign recipients are required');
+  if (!subject || !html) {
+    throw new Error('subject and html are required');
   }
 
-  const snapshot = await resolveRenderedSnapshot(appContext, {
-    templateId: input.templateId,
-    subject: input.subject,
-    html: input.html,
-    text: input.text,
-    variables: toStringRecord(input.variables),
+  const sendSeed = createUlid();
+  const sendId = createDeterministicSendId(sendSeed, normalizedRecipient);
+  const route =
+    await appContext.repositories.routingRules.findRouteForRecipient(
+      normalizedRecipient,
+    );
+
+  const created = await appContext.repositories.sends.create({
+    id: sendId,
+    kind: 'individual',
+    recipientEmail: normalizedRecipient,
+    subjectSnapshot: subject,
+    htmlSnapshot: html,
+    textSnapshot: text,
+    status: 'queued',
+    apiKeyId: input.apiKeyId,
+    templateId: null,
+    callbackEndpointId: input.callbackEndpoint?.id ?? null,
+    routingRuleVersion: route?.rule.version ?? null,
+    sendSmtpNodeId: route?.node.id ?? null,
   });
 
-  const queued: EnqueuedRecipient[] = [];
-  const skipped: SkippedRecipient[] = [];
+  const enqueued = await dependencies.enqueueSend(created.id);
+  await appContext.repositories.sends.setQueueJobId(created.id, enqueued.jobId);
 
-  for (const recipientEmail of normalizedRecipients) {
-    const eligibility = await getSubscriberEligibility(
-      appContext,
-      recipientEmail,
-    );
-
-    if (!eligibility.eligible && eligibility.reason) {
-      skipped.push({
-        email: recipientEmail,
-        reason: eligibility.reason,
-      });
-      continue;
-    }
-
-    const sendId = createDeterministicSendId(campaignId, recipientEmail);
-    const route =
-      await appContext.repositories.routingRules.findRouteForRecipient(
-        recipientEmail,
-      );
-    const created = await appContext.repositories.sends.create({
-      id: sendId,
-      kind: 'campaign',
-      recipientEmail,
-      subjectSnapshot: snapshot.subject,
-      htmlSnapshot: snapshot.html,
-      textSnapshot: snapshot.text,
-      audienceProvenance: audience.get(recipientEmail) ?? null,
-      status: 'queued',
-      templateId: snapshot.templateId,
-      routingRuleVersion: route?.rule.version ?? null,
-      sendSmtpNodeId: route?.node.id ?? null,
-    });
-
-    const enqueued = await dependencies.enqueueSend(created.id);
-    await appContext.repositories.sends.setQueueJobId(
-      created.id,
-      enqueued.jobId,
-    );
-
-    queued.push({
-      email: recipientEmail,
+  if (input.callbackEndpoint) {
+    await appContext.repositories.outboundWebhookDeliveries.create({
+      id: createUlid(),
       sendId: created.id,
-      queueJobId: enqueued.jobId,
-      status: 'queued',
+      targetUrl: input.callbackEndpoint.targetUrl,
+      signingSecret: input.callbackEndpoint.signingSecret,
+      status: 'pending',
+      payload: {
+        sendId: created.id,
+        recipientEmail: normalizedRecipient,
+      },
     });
   }
 
   return {
-    campaignId,
-    status: 'accepted',
-    totals: {
-      requested: normalizedRecipients.length,
-      queued: queued.length,
-      skipped: skipped.length,
-    },
-    queued,
-    skipped,
+    sendId: created.id,
+    status: 'queued',
+    queueJobId: enqueued.jobId,
+    recipient: normalizedRecipient,
+    callbackEndpointId: input.callbackEndpoint?.id ?? null,
+  };
+};
+
+export const enqueueRawEmlSend = async (
+  appContext: ManagementConsoleAppContext,
+  dependencies: EnqueueDependencies,
+  input: RawEmlSendInput,
+): Promise<RenderedSendResult> => {
+  const rawEml = input.eml.trim();
+  const parsed = parseRawEml(rawEml);
+  const sendSeed = createUlid();
+  const sendId = createDeterministicSendId(sendSeed, parsed.recipientEmail);
+  const route =
+    await appContext.repositories.routingRules.findRouteForRecipient(
+      parsed.recipientEmail,
+    );
+
+  const created = await appContext.repositories.sends.create({
+    id: sendId,
+    kind: 'individual',
+    recipientEmail: parsed.recipientEmail,
+    subjectSnapshot: parsed.subject,
+    htmlSnapshot: rawEml,
+    textSnapshot: null,
+    emlSnapshot: rawEml,
+    status: 'queued',
+    apiKeyId: input.apiKeyId,
+    templateId: null,
+    callbackEndpointId: input.callbackEndpoint?.id ?? null,
+    routingRuleVersion: route?.rule.version ?? null,
+    sendSmtpNodeId: route?.node.id ?? null,
+  });
+
+  const enqueued = await dependencies.enqueueSend(created.id);
+  await appContext.repositories.sends.setQueueJobId(created.id, enqueued.jobId);
+
+  if (input.callbackEndpoint) {
+    await appContext.repositories.outboundWebhookDeliveries.create({
+      id: createUlid(),
+      sendId: created.id,
+      targetUrl: input.callbackEndpoint.targetUrl,
+      signingSecret: input.callbackEndpoint.signingSecret,
+      status: 'pending',
+      payload: {
+        sendId: created.id,
+        recipientEmail: parsed.recipientEmail,
+      },
+    });
+  }
+
+  return {
+    sendId: created.id,
+    status: 'queued',
+    queueJobId: enqueued.jobId,
+    recipient: parsed.recipientEmail,
+    callbackEndpointId: input.callbackEndpoint?.id ?? null,
   };
 };

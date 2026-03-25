@@ -88,7 +88,7 @@ const createDispatchWorkerOptions = (
 
     const route = await persistence.resolveRouteForSend(send);
 
-    if (!route) {
+    if (!route || route.nodes.length === 0) {
       await persistence.updateSendState(send.id, SendState.FailedPermanent);
       await persistence.appendDeliveryEvent({
         sendId: send.id,
@@ -98,65 +98,99 @@ const createDispatchWorkerOptions = (
       return;
     }
 
-    const relayIdentity = `${route.host}:${route.port}`;
-    const attemptNumber = await persistence.getNextAttemptNumber(send.id);
-    const attemptId = await persistence.createDispatchAttempt({
-      sendId: send.id,
-      attemptNumber,
-      sendSmtpNodeId: route.nodeId,
-      relayIdentity,
-    });
+    let lastTransientFailure: {
+      smtpCode: string | null;
+      enhancedCode: string | null;
+      reason: string;
+      relayIdentity: string;
+      rawPayload: Record<string, unknown>;
+      attemptNumber: number;
+    } | null = null;
 
-    const outcome = await transport.dispatch({
-      sendId: send.id,
-      recipientEmail: send.recipientEmail,
-      subject: send.subjectSnapshot,
-      html: send.htmlSnapshot,
-      text: send.textSnapshot,
-      smtpNode: {
-        id: route.nodeId,
-        host: route.host,
-        port: route.port,
-        username: route.username,
-        passwordSecretRef: route.passwordSecretRef,
-      },
-    });
+    for (const candidate of route.nodes) {
+      const relayIdentity = `${candidate.host}:${candidate.port}`;
+      const attemptNumber = await persistence.getNextAttemptNumber(send.id);
+      const attemptId = await persistence.createDispatchAttempt({
+        sendId: send.id,
+        attemptNumber,
+        sendSmtpNodeId: candidate.nodeId,
+        relayIdentity,
+      });
 
-    if (outcome.result === 'accepted') {
+      const outcome = await transport.dispatch({
+        sendId: send.id,
+        recipientEmail: send.recipientEmail,
+        subject: send.subjectSnapshot,
+        html: send.htmlSnapshot,
+        text: send.textSnapshot,
+        eml: send.emlSnapshot,
+        smtpNode: {
+          id: candidate.nodeId,
+          host: candidate.host,
+          port: candidate.port,
+          username: candidate.username,
+          passwordSecretRef: candidate.passwordSecretRef,
+        },
+      });
+
+      if (outcome.result === 'accepted') {
+        await persistence.finishDispatchAttempt({
+          attemptId,
+          status: 'accepted',
+          smtpCode: outcome.smtpCode,
+          enhancedCode: outcome.enhancedCode,
+          reason: outcome.response,
+          queueId: outcome.postfixQueueId,
+          relayIdentity: outcome.relayIdentity ?? relayIdentity,
+          rawPayload: outcome.rawPayload,
+        });
+        await persistence.markAcceptedByMta({
+          sendId: send.id,
+          attemptId,
+          relayNodeId: candidate.nodeId,
+          queueId: outcome.postfixQueueId,
+          response: outcome.response,
+        });
+        await persistence.appendDeliveryEvent({
+          sendId: send.id,
+          eventType: DeliveryEventType.AcceptedByMta,
+          smtpCode: outcome.smtpCode,
+          enhancedSmtpCode: outcome.enhancedCode,
+          reason: outcome.response,
+          relayIdentity: outcome.relayIdentity ?? relayIdentity,
+          queueId: outcome.postfixQueueId,
+          rawPayload: outcome.rawPayload,
+        });
+        return;
+      }
+
+      if (outcome.result === 'failed_permanent') {
+        await persistence.finishDispatchAttempt({
+          attemptId,
+          status: 'failed_permanent',
+          smtpCode: outcome.smtpCode,
+          enhancedCode: outcome.enhancedCode,
+          reason: outcome.reason,
+          queueId: null,
+          relayIdentity,
+          rawPayload: outcome.rawPayload,
+        });
+        await persistence.updateSendState(send.id, SendState.FailedPermanent);
+        await persistence.appendDeliveryEvent({
+          sendId: send.id,
+          eventType: DeliveryEventType.FailedPermanent,
+          smtpCode: outcome.smtpCode,
+          enhancedSmtpCode: outcome.enhancedCode,
+          reason: outcome.reason,
+          relayIdentity,
+          rawPayload: outcome.rawPayload,
+        });
+        return;
+      }
+
       await persistence.finishDispatchAttempt({
         attemptId,
-        status: 'accepted',
-        smtpCode: outcome.smtpCode,
-        enhancedCode: outcome.enhancedCode,
-        reason: outcome.response,
-        queueId: outcome.postfixQueueId,
-        relayIdentity: outcome.relayIdentity ?? relayIdentity,
-        rawPayload: outcome.rawPayload,
-      });
-      await persistence.markAcceptedByMta({
-        sendId: send.id,
-        attemptId,
-        relayNodeId: route.nodeId,
-        queueId: outcome.postfixQueueId,
-        response: outcome.response,
-      });
-      await persistence.appendDeliveryEvent({
-        sendId: send.id,
-        eventType: DeliveryEventType.AcceptedByMta,
-        smtpCode: outcome.smtpCode,
-        enhancedSmtpCode: outcome.enhancedCode,
-        reason: outcome.response,
-        relayIdentity: outcome.relayIdentity ?? relayIdentity,
-        queueId: outcome.postfixQueueId,
-        rawPayload: outcome.rawPayload,
-      });
-      return;
-    }
-
-    if (outcome.result === 'failed_permanent') {
-      await persistence.finishDispatchAttempt({
-        attemptId,
-        status: 'failed_permanent',
+        status: 'failed_transient',
         smtpCode: outcome.smtpCode,
         enhancedCode: outcome.enhancedCode,
         reason: outcome.reason,
@@ -164,50 +198,46 @@ const createDispatchWorkerOptions = (
         relayIdentity,
         rawPayload: outcome.rawPayload,
       });
-      await persistence.updateSendState(send.id, SendState.FailedPermanent);
-      await persistence.appendDeliveryEvent({
-        sendId: send.id,
-        eventType: DeliveryEventType.FailedPermanent,
+
+      lastTransientFailure = {
         smtpCode: outcome.smtpCode,
-        enhancedSmtpCode: outcome.enhancedCode,
+        enhancedCode: outcome.enhancedCode,
         reason: outcome.reason,
         relayIdentity,
         rawPayload: outcome.rawPayload,
-      });
-      return;
+        attemptNumber,
+      };
     }
 
-    const hasRetriesRemaining = attemptNumber < SEND_DISPATCH_MAX_ATTEMPTS;
-    await persistence.finishDispatchAttempt({
-      attemptId,
-      status: 'failed_transient',
-      smtpCode: outcome.smtpCode,
-      enhancedCode: outcome.enhancedCode,
-      reason: outcome.reason,
-      queueId: null,
-      relayIdentity,
-      rawPayload: outcome.rawPayload,
-    });
+    const hasRetriesRemaining =
+      (lastTransientFailure?.attemptNumber ?? 0) < SEND_DISPATCH_MAX_ATTEMPTS;
 
-    if (hasRetriesRemaining) {
+    if (hasRetriesRemaining && lastTransientFailure) {
       await persistence.updateSendState(send.id, SendState.Deferred);
       await persistence.appendDeliveryEvent({
         sendId: send.id,
         eventType: DeliveryEventType.Deferred,
-        smtpCode: outcome.smtpCode,
-        enhancedSmtpCode: outcome.enhancedCode,
-        reason: outcome.reason,
-        relayIdentity,
+        smtpCode: lastTransientFailure.smtpCode,
+        enhancedSmtpCode: lastTransientFailure.enhancedCode,
+        reason: lastTransientFailure.reason,
+        relayIdentity: lastTransientFailure.relayIdentity,
         rawPayload: {
-          ...outcome.rawPayload,
-          retryInMs: toRetryDelayForAttempt(attemptNumber, retryDelaysMs),
-          attemptNumber,
+          ...lastTransientFailure.rawPayload,
+          retryInMs: toRetryDelayForAttempt(
+            lastTransientFailure.attemptNumber,
+            retryDelaysMs,
+          ),
+          attemptNumber: lastTransientFailure.attemptNumber,
+          failoverChainLength: route.nodes.length,
         },
       });
 
       throw new DispatchRetryableError(
         `Transient SMTP failure for send ${send.id}`,
-        toRetryDelayForAttempt(attemptNumber, retryDelaysMs),
+        toRetryDelayForAttempt(
+          lastTransientFailure.attemptNumber,
+          retryDelaysMs,
+        ),
       );
     }
 
@@ -215,13 +245,14 @@ const createDispatchWorkerOptions = (
     await persistence.appendDeliveryEvent({
       sendId: send.id,
       eventType: DeliveryEventType.FailedTransient,
-      smtpCode: outcome.smtpCode,
-      enhancedSmtpCode: outcome.enhancedCode,
-      reason: outcome.reason,
-      relayIdentity,
+      smtpCode: lastTransientFailure?.smtpCode ?? null,
+      enhancedSmtpCode: lastTransientFailure?.enhancedCode ?? null,
+      reason: lastTransientFailure?.reason ?? 'Transient SMTP failure',
+      relayIdentity: lastTransientFailure?.relayIdentity ?? null,
       rawPayload: {
-        ...outcome.rawPayload,
+        ...(lastTransientFailure?.rawPayload ?? {}),
         exhaustedAttempts: SEND_DISPATCH_MAX_ATTEMPTS,
+        failoverChainLength: route.nodes.length,
       },
     });
   },

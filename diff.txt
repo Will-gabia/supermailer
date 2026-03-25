@@ -1,0 +1,606 @@
+diff --git a/apps/management-console/src/client/App.tsx b/apps/management-console/src/client/App.tsx
+index db1ecad..6a8c9a2 100644
+--- a/apps/management-console/src/client/App.tsx
++++ b/apps/management-console/src/client/App.tsx
+@@ -198,8 +198,8 @@ export const App = () => {
+   >(null);
+   const initialSubscriberFilterState =
+     parseSubscriberFiltersFromSearch(getSearch());
+-  const [subscriberTab, setSubscriberTab] = useState<SubscriberTab>(
+-    initialSubscriberFilterState.tab,
++  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(
++    initialSubscriberFilterState.groupId,
+   );
+   const [editingSubscriber, setEditingSubscriber] =
+     useState<SubscriberRecord | null>(null);
+@@ -347,7 +347,7 @@ export const App = () => {
+       return;
+     }
+ 
+-    const nextSearch = buildSubscriberFiltersSearch({ tab: subscriberTab });
++    const nextSearch = buildSubscriberFiltersSearch({ groupId: selectedGroupId });
+ 
+     if (nextSearch === locationSearch) {
+       return;
+@@ -355,7 +355,7 @@ export const App = () => {
+ 
+     window.history.replaceState({}, '', `${pathname}${nextSearch}`);
+     setLocationSearch(nextSearch);
+-  }, [locationSearch, pathname, subscriberTab]);
++  }, [locationSearch, pathname, selectedGroupId]);
+ 
+   useEffect(() => {
+     if (pathname !== '/sends') {
+@@ -811,7 +811,7 @@ export const App = () => {
+     const url = URL.createObjectURL(blob);
+     const link = document.createElement('a');
+     link.href = url;
+-    link.download = `subscribers-${subscriberTab}.csv`;
++    link.download = `subscribers-${selectedGroupId || 'all'}.csv`;
+     link.click();
+     URL.revokeObjectURL(url);
+   };
+@@ -1020,11 +1020,8 @@ export const App = () => {
+ 
+   // Filtered Subscribers
+   const filteredSubscribers = subscribers.filter((s) => {
+-    if (subscriberTab === 'all') return true;
+-    if (subscriberTab === 'eligible') return s.eligible && !s.isUnsubscribed;
+-    if (subscriberTab === 'unsubscribed') return s.isUnsubscribed;
+-    if (subscriberTab === 'suppressed') return s.suppressionReasons.length > 0;
+-    return true;
++    if (!selectedGroupId) return true;
++    return s.groups.some(g => g.id === selectedGroupId);
+   });
+ 
+   const allCount = subscribers.length;
+@@ -1322,359 +1319,214 @@ export const App = () => {
+                     + 신규 구독자
+                   </button>
+                 </div>
+-              </div>
+-
+-              <div className="grid grid-cols-4 mb-6">
+-                <button
+-                  className="stat-card stat-button"
+-                  data-testid="subscriber-tab-all"
+-                  onClick={() => setSubscriberTab('all')}
+-                  type="button"
+-                >
+-                  <div className="stat-title">전체 구독자</div>
+-                  <div className="stat-value">{allCount}</div>
+-                </button>
+-                <button
+-                  className="stat-card stat-button"
+-                  data-testid="subscriber-tab-eligible"
+-                  onClick={() => setSubscriberTab('eligible')}
+-                  type="button"
+-                >
+-                  <div
+-                    className="stat-title"
+-                    style={{ color: 'var(--color-success)' }}
+-                  >
+-                    발송 가능
+-                  </div>
+-                  <div className="stat-value">{eligibleCount}</div>
+-                </button>
+-                <button
+-                  className="stat-card stat-button"
+-                  data-testid="subscriber-tab-unsubscribed"
+-                  onClick={() => setSubscriberTab('unsubscribed')}
+-                  type="button"
+-                >
+-                  <div
+-                    className="stat-title"
+-                    style={{ color: 'var(--color-warning)' }}
+-                  >
+-                    수신 거부
+-                  </div>
+-                  <div className="stat-value">{unsubCount}</div>
+-                </button>
+-                <button
+-                  className="stat-card stat-button"
+-                  data-testid="subscriber-tab-suppressed"
+-                  onClick={() => setSubscriberTab('suppressed')}
+-                  type="button"
+-                >
+-                  <div
+-                    className="stat-title"
+-                    style={{ color: 'var(--color-error)' }}
+-                  >
+-                    발송 억제됨
++              <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
++                <div className="col-span-1 flex flex-col gap-4">
++                  <div className="card h-full">
++                    <div className="card-header">
++                      <h3 className="card-title">수신 그룹 (Send Groups)</h3>
++                    </div>
++                    <div className="card-body p-0">
++                      <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
++                        <li>
++                          <button
++                            data-testid="group-select-all"
++                            className={`w-full text-left p-3 border-b border-light flex justify-between items-center ${!selectedGroupId ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
++                            style={{ background: !selectedGroupId ? 'var(--bg-sidebar-active)' : 'transparent', border: 'none', cursor: 'pointer', borderBottom: '1px solid var(--border-light)' }}
++                            onClick={() => setSelectedGroupId(null)}
++                          >
++                            <span style={{ fontWeight: !selectedGroupId ? 'bold' : 'normal' }}>전체 구독자</span>
++                            <span className="badge badge-neutral">{allCount}</span>
++                          </button>
++                        </li>
++                        {isLoadingGroups ? (
++                          <li className="p-3 text-secondary text-sm">그룹을 불러오는 중...</li>
++                        ) : subscriberGroups.length === 0 ? (
++                          <li className="p-3 text-secondary text-sm">등록된 그룹이 없습니다.</li>
++                        ) : (
++                          subscriberGroups.map((g) => {
++                            const memberCount = subscribers.filter(s => s.groups.some(sg => sg.id === g.id)).length;
++                            const isSelected = selectedGroupId === g.id;
++                            return (
++                              <li key={g.id}>
++                                <button
++                                  data-testid={`group-select-${g.id}`}
++                                  className="w-full text-left p-3 border-b border-light flex justify-between items-center"
++                                  style={{ background: isSelected ? 'var(--bg-sidebar-active)' : 'transparent', border: 'none', cursor: 'pointer', borderBottom: '1px solid var(--border-light)' }}
++                                  onClick={() => setSelectedGroupId(g.id)}
++                                >
++                                  <span style={{ fontWeight: isSelected ? 'bold' : 'normal' }}>{g.name}</span>
++                                  <span className="badge badge-info">{memberCount}</span>
++                                </button>
++                              </li>
++                            );
++                          })
++                        )}
++                      </ul>
++                      <div className="p-3 border-t border-light mt-auto">
++                        <div className="text-sm font-bold mb-2">새 그룹 추가</div>
++                        <div className="flex gap-2">
++                          <input
++                            type="text"
++                            placeholder="이름 입력"
++                            value={groupName}
++                            onChange={(e) => setGroupName(e.target.value)}
++                            style={{ flex: 1, padding: '0.25rem 0.5rem', fontSize: 'var(--font-sm)' }}
++                          />
++                          <button 
++                            className="btn btn-primary btn-sm"
++                            onClick={createOrUpdateGroup}
++                          >
++                            추가
++                          </button>
++                        </div>
++                        {groupActionError && <div className="text-error text-xs mt-1">{groupActionError}</div>}
++                      </div>
++                    </div>
+                   </div>
+-                  <div className="stat-value">{suppCount}</div>
+-                </button>
+-              </div>
+-
+-              <div className="card">
+-                <div
+-                  className="card-header flex"
+-                  style={{
+-                    justifyContent: 'space-between',
+-                    alignItems: 'center',
+-                  }}
+-                >
+-                  <h3 className="card-title">구독자 그룹 관리</h3>
+                 </div>
+-                <div className="card-body">
+-                  <p style={{ color: 'var(--text-secondary)', marginTop: 0 }}>
+-                    상태 탭은 발송 가능 여부를 빠르게 보는 용도이고, 그룹은
+-                    운영자가 직접 만든 관리용 묶음입니다.
+-                  </p>
+-                  <div className="flex gap-2 mb-4">
+-                    <input
+-                      type="text"
+-                      aria-label="새 그룹 이름"
+-                      placeholder="새 그룹 이름"
+-                      value={groupName}
+-                      onChange={(e) => setGroupName(e.target.value)}
+-                    />
+-                    <button
+-                      className="btn btn-primary"
+-                      onClick={createOrUpdateGroup}
+-                      type="button"
+-                    >
+-                      {editingGroupId ? '그룹 수정' : '그룹 추가'}
+-                    </button>
+-                    {editingGroupId && (
+-                      <button
+-                        className="btn btn-secondary"
+-                        onClick={() => {
+-                          setEditingGroupId(null);
+-                          setGroupName('');
+-                        }}
+-                        type="button"
+-                      >
+-                        취소
+-                      </button>
+-                    )}
+-                  </div>
+-                  {groupActionError && (
+-                    <p style={{ color: 'var(--color-error)' }}>
+-                      {groupActionError}
+-                    </p>
+-                  )}
+-                  {isLoadingGroups ? (
+-                    <p style={{ color: 'var(--text-secondary)' }}>
+-                      그룹을 불러오는 중...
+-                    </p>
+-                  ) : null}
+ 
+-                  <div className="flex gap-2 flex-wrap">
+-                    {subscriberGroups.length === 0 ? (
+-                      <span
+-                        style={{
+-                          color: 'var(--text-secondary)',
+-                          fontSize: 'var(--font-sm)',
+-                        }}
+-                      >
+-                        등록된 그룹이 없습니다.
+-                      </span>
+-                    ) : (
+-                      subscriberGroups.map((g) => (
+-                        <div
+-                          key={g.id}
+-                          className="badge badge-neutral flex gap-2 items-center"
+-                          data-testid={`subscriber-group-${g.id}`}
+-                        >
+-                          {g.name}
+-                          <button
+-                            aria-label={`${g.name} 그룹 수정`}
+-                            style={{
+-                              background: 'transparent',
+-                              border: 'none',
+-                              cursor: 'pointer',
+-                              padding: 0,
+-                            }}
++                <div className="col-span-3 flex flex-col gap-4">
++                  <div className="card">
++                    <div className="card-header flex justify-between items-center">
++                      <div>
++                        <h3 className="card-title text-xl mb-1">
++                          {selectedGroupId ? subscriberGroups.find(g => g.id === selectedGroupId)?.name || '알 수 없는 그룹' : '전체 구독자'}
++                        </h3>
++                        <div className="text-sm text-secondary">
++                          {selectedGroupId ? '그룹에 속한 구독자 목록입니다.' : '모든 구독자 목록입니다. 발송 시에는 가급적 그룹을 지정해 주세요.'}
++                        </div>
++                      </div>
++                      {selectedGroupId && (
++                        <div className="flex gap-2">
++                          <button 
++                            className="btn btn-secondary btn-sm"
+                             onClick={() => {
+-                              setEditingGroupId(g.id);
+-                              setGroupName(g.name);
++                              const g = subscriberGroups.find(g => g.id === selectedGroupId);
++                              if (g) {
++                                setEditingGroupId(g.id);
++                                setGroupName(g.name);
++                              }
+                             }}
+-                            type="button"
+                           >
+-                            ✏️
++                            이름 수정
+                           </button>
+-                          <button
+-                            aria-label={`${g.name} 그룹 삭제`}
+-                            style={{
+-                              background: 'transparent',
+-                              border: 'none',
+-                              cursor: 'pointer',
+-                              padding: 0,
+-                              color: 'var(--color-error)',
++                          <button 
++                            className="btn btn-danger btn-sm"
++                            onClick={() => {
++                              deleteGroup(selectedGroupId);
++                              setSelectedGroupId(null);
+                             }}
+-                            onClick={() => deleteGroup(g.id)}
+-                            type="button"
+                           >
+-                            ✕
++                            그룹 삭제
+                           </button>
+                         </div>
+-                      ))
+-                    )}
+-                  </div>
+-                </div>
+-              </div>
+-
+-              <div className="card">
+-                <div className="card-header">
+-                  <div
+-                    className="tabs"
+-                    style={{
+-                      marginBottom: 0,
+-                      borderBottom: 'none',
+-                      gap: '1rem',
+-                    }}
+-                  >
+-                    <button
+-                      className={`tab ${subscriberTab === 'all' ? 'active' : ''}`}
+-                      onClick={() => setSubscriberTab('all')}
+-                    >
+-                      전체 (All)
+-                    </button>
+-                    <button
+-                      className={`tab ${subscriberTab === 'eligible' ? 'active' : ''}`}
+-                      onClick={() => setSubscriberTab('eligible')}
+-                    >
+-                      발송 가능 (Eligible)
+-                    </button>
+-                    <button
+-                      className={`tab ${subscriberTab === 'unsubscribed' ? 'active' : ''}`}
+-                      onClick={() => setSubscriberTab('unsubscribed')}
+-                    >
+-                      수신 거부 (Unsubscribed)
+-                    </button>
+-                    <button
+-                      className={`tab ${subscriberTab === 'suppressed' ? 'active' : ''}`}
+-                      onClick={() => setSubscriberTab('suppressed')}
+-                    >
+-                      억제됨 (Suppressed)
+-                    </button>
+-                  </div>
+-                  <div>
+-                    <button
+-                      className="btn btn-danger btn-sm"
+-                      disabled
+-                      title="백엔드 삭제 기능 미지원"
+-                    >
+-                      선택 삭제
+-                    </button>
+-                  </div>
+-                </div>
+-                {subscriberActionError && (
+-                  <p style={{ color: 'var(--color-error)' }}>
+-                    {subscriberActionError}
+-                  </p>
+-                )}
+-                <div className="data-table-wrapper">
+-                  <table className="data-table" data-testid="subscriber-list">
+-                    <thead>
+-                      <tr>
+-                        <th style={{ width: '40px' }}>
+-                          <input
+-                            type="checkbox"
+-                            disabled
+-                            title="선택 기능 미지원"
+-                          />
+-                        </th>
+-                        <th>이메일 / 이름</th>
+-                        <th>상태</th>
+-                        <th>최근 동기화</th>
+-                        <th>액션</th>
+-                      </tr>
+-                    </thead>
+-                    <tbody>
+-                      {isLoadingSubscribers && (
+-                        <tr>
+-                          <td
+-                            colSpan={5}
+-                            className="text-center"
+-                            style={{ padding: '2rem' }}
+-                          >
+-                            로딩 중...
+-                          </td>
+-                        </tr>
+                       )}
+-                      {!isLoadingSubscribers &&
+-                        filteredSubscribers.length === 0 && (
+-                          <tr>
+-                            <td
+-                              colSpan={5}
+-                              className="text-center"
+-                              style={{ padding: '2rem' }}
+-                            >
+-                              데이터가 없습니다.
+-                            </td>
+-                          </tr>
+-                        )}
+-                      {filteredSubscribers.map((s) => (
+-                        <tr key={s.id} data-testid={`subscriber-${s.email}`}>
+-                          <td>
+-                            <input type="checkbox" disabled />
+-                          </td>
+-                          <td>
+-                            <div style={{ fontWeight: 600 }}>{s.email}</div>
+-                            <div
+-                              style={{
+-                                fontSize: 'var(--font-xs)',
+-                                color: 'var(--text-secondary)',
+-                              }}
+-                            >
+-                              {s.displayName || '-'}
++                    </div>
++                    
++                    <div className="card-body p-0 border-b border-light flex p-4 gap-6 bg-gray-50" style={{ background: 'var(--bg-main)', borderBottom: '1px solid var(--border-light)', padding: '1rem', display: 'flex', gap: '1.5rem' }}>
++                      {(() => {
++                        const members = filteredSubscribers;
++                        const total = members.length;
++                        const eligible = members.filter(s => s.eligible && !s.isUnsubscribed).length;
++                        const unsub = members.filter(s => s.isUnsubscribed).length;
++                        const suppressed = members.filter(s => s.suppressionReasons.length > 0).length;
++                        return (
++                          <>
++                            <div>
++                              <div className="text-xs text-secondary mb-1">총 인원</div>
++                              <div className="text-2xl font-bold">{total}</div>
+                             </div>
+-                          </td>
+-                          <td>
+-                            <div className="flex gap-2">
+-                              {s.eligible && !s.isUnsubscribed ? (
+-                                <span className="badge badge-success">
+-                                  발송 가능
+-                                </span>
+-                              ) : null}
+-                              {s.isUnsubscribed ? (
+-                                <span className="badge badge-warning">
+-                                  수신 거부
+-                                </span>
+-                              ) : null}
+-                              {s.suppressionReasons.length > 0 ? (
+-                                <span className="badge badge-error">
+-                                  억제됨 ({s.suppressionReasons.join(',')})
+-                                </span>
+-                              ) : null}
+-                              {!s.eligible &&
+-                              !s.isUnsubscribed &&
+-                              s.suppressionReasons.length === 0 ? (
+-                                <span className="badge badge-neutral">
+-                                  {s.eligibilityReason || '불가'}
+-                                </span>
+-                              ) : null}
+-                              {s.groups && s.groups.length > 0
+-                                ? s.groups.map((g) => (
+-                                    <span
+-                                      key={g.id}
+-                                      className="badge badge-info"
+-                                    >
+-                                      {g.name}
+-                                    </span>
+-                                  ))
+-                                : null}
++                            <div>
++                              <div className="text-xs text-secondary mb-1">발송 가능</div>
++                              <div className="text-2xl font-bold text-success" style={{ color: 'var(--color-success)' }}>{eligible}</div>
+                             </div>
+-                          </td>
+-                          <td>
+-                            {s.lastSyncedAt
+-                              ? new Date(s.lastSyncedAt).toLocaleString()
+-                              : '없음'}
+-                          </td>
+-                          <td>
+-                            <div className="flex gap-2">
+-                              <button
+-                                className="btn btn-secondary btn-sm"
+-                                onClick={() =>
+-                                  void toggleSubscriberUnsubscribed(s)
+-                                }
+-                              >
+-                                {s.isUnsubscribed
+-                                  ? '재구독 처리'
+-                                  : '수신거부 처리'}
+-                              </button>
+-                              <button
+-                                className="btn btn-secondary btn-sm"
+-                                onClick={() => void addHardBounceSuppression(s)}
+-                              >
+-                                하드바운스 처리
+-                              </button>
+-                              <button
+-                                className="btn btn-secondary btn-sm"
+-                                onClick={() => startEditingSubscriber(s)}
+-                              >
+-                                정보 수정
+-                              </button>
+-                              <button
+-                                className="btn btn-danger btn-sm"
+-                                onClick={() => void deleteSubscriber(s.id)}
+-                                type="button"
+-                              >
+-                                삭제
+-                              </button>
++                            <div>
++                              <div className="text-xs text-secondary mb-1">수신 거부</div>
++                              <div className="text-2xl font-bold text-warning" style={{ color: 'var(--color-warning)' }}>{unsub}</div>
+                             </div>
+-                          </td>
+-                        </tr>
+-                      ))}
+-                    </tbody>
+-                  </table>
++                            <div>
++                              <div className="text-xs text-secondary mb-1">발송 억제 (하드바운스 등)</div>
++                              <div className="text-2xl font-bold text-error" style={{ color: 'var(--color-error)' }}>{suppressed}</div>
++                            </div>
++                          </>
++                        );
++                      })()}
++                    </div>
++
++                    {subscriberActionError && (
++                      <div className="p-4 text-error border-b border-light" style={{ color: 'var(--color-error)', padding: '1rem', borderBottom: '1px solid var(--border-light)' }}>
++                        {subscriberActionError}
++                      </div>
++                    )}
++
++                    <div className="data-table-wrapper">
++                      <table className="data-table" data-testid="subscriber-list">
++                        <thead>
++                          <tr>
++                            <th>이메일 / 이름</th>
++                            <th>상태</th>
++                            <th>그룹</th>
++                            <th>최근 동기화</th>
++                            <th>액션</th>
++                          </tr>
++                        </thead>
++                        <tbody>
++                          {isLoadingSubscribers ? (
++                            <tr><td colSpan={5} className="text-center" style={{ padding: '2rem' }}>로딩 중...</td></tr>
++                          ) : filteredSubscribers.length === 0 ? (
++                            <tr>
++                              <td colSpan={5} className="text-center" style={{ padding: '3rem' }}>
++                                <div className="text-secondary mb-2">이 그룹에 속한 구독자가 없습니다.</div>
++                                <button 
++                                  className="btn btn-primary btn-sm"
++                                  onClick={() => document.getElementById('add-subscriber-form')?.scrollIntoView({ behavior: 'smooth' })}
++                                >
++                                  구독자 추가하기
++                                </button>
++                              </td>
++                            </tr>
++                          ) : (
++                            filteredSubscribers.map((s) => (
++                              <tr key={s.id} data-testid={`subscriber-${s.email}`}>
++                                <td>
++                                  <div style={{ fontWeight: 600 }}>{s.email}</div>
++                                  <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-secondary)' }}>{s.displayName || '-'}</div>
++                                </td>
++                                <td>
++                                  <div className="flex gap-2">
++                                    {s.eligible && !s.isUnsubscribed ? <span className="badge badge-success">발송 가능</span> : null}
++                                    {s.isUnsubscribed ? <span className="badge badge-warning">수신 거부</span> : null}
++                                    {s.suppressionReasons.length > 0 ? <span className="badge badge-error">억제됨 ({s.suppressionReasons.join(',')})</span> : null}
++                                    {!s.eligible && !s.isUnsubscribed && s.suppressionReasons.length === 0 ? <span className="badge badge-neutral">{s.eligibilityReason || '불가'}</span> : null}
++                                  </div>
++                                </td>
++                                <td>
++                                  <div className="flex gap-1 flex-wrap">
++                                    {s.groups && s.groups.length > 0 ? s.groups.map(g => <span key={g.id} className="badge badge-info">{g.name}</span>) : '-'}
++                                  </div>
++                                </td>
++                                <td>{s.lastSyncedAt ? new Date(s.lastSyncedAt).toLocaleString() : '없음'}</td>
++                                <td>
++                                  <div className="flex gap-2">
++                                    <button className="btn btn-secondary btn-sm" onClick={() => void toggleSubscriberUnsubscribed(s)}>
++                                      {s.isUnsubscribed ? '재구독 처리' : '수신거부 처리'}
++                                    </button>
++                                    <button className="btn btn-secondary btn-sm" onClick={() => void addHardBounceSuppression(s)}>하드바운스 처리</button>
++                                    <button className="btn btn-secondary btn-sm" onClick={() => startEditingSubscriber(s)}>정보 수정</button>
++                                    <button className="btn btn-danger btn-sm" onClick={() => void deleteSubscriber(s.id)} type="button">삭제</button>
++                                  </div>
++                                </td>
++                              </tr>
++                            ))
++                          )}
++                        </tbody>
++                      </table>
++                    </div>
++                  </div>
+                 </div>
+               </div>
+ 
++
+               <div className="grid grid-cols-2">
+                 <div className="card" id="add-subscriber-form">
+                   <div className="card-header">

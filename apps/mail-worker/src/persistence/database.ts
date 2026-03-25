@@ -19,12 +19,18 @@ type RouteRecord = {
   routingRuleVersion: number | null;
 };
 
+type RouteChainRecord = {
+  nodes: RouteRecord[];
+  routingRuleVersion: number | null;
+};
+
 type SendRecord = {
   id: string;
   recipientEmail: string;
   subjectSnapshot: string;
   htmlSnapshot: string;
   textSnapshot: string | null;
+  emlSnapshot: string | null;
   status: string;
   queueJobId: string | null;
   sendSmtpNodeId: string | null;
@@ -121,7 +127,7 @@ export const createWorkerPersistence = (pool: Pool) => ({
     const result = await pool.query<SendRecord>(
       `
         select id, recipient_email as "recipientEmail", subject_snapshot as "subjectSnapshot",
-               html_snapshot as "htmlSnapshot", text_snapshot as "textSnapshot", status,
+               html_snapshot as "htmlSnapshot", text_snapshot as "textSnapshot", eml_snapshot as "emlSnapshot", status,
                queue_job_id as "queueJobId", send_smtp_node_id as "sendSmtpNodeId",
                routing_rule_version as "routingRuleVersion"
         from sends
@@ -135,21 +141,24 @@ export const createWorkerPersistence = (pool: Pool) => ({
   },
   resolveRouteForSend: async (
     send: SendRecord,
-  ): Promise<RouteRecord | null> => {
+  ): Promise<RouteChainRecord | null> => {
     if (send.sendSmtpNodeId) {
       const byId = await pool.query<RouteRecord>(
         `
           select n.id as "nodeId", n.host, n.port, n.username, n.password_secret_ref as "passwordSecretRef",
                  $2::integer as "routingRuleVersion"
           from send_smtp_nodes n
-          where n.id = $1 and n.is_active = true
+          where n.id = $1 and n.is_active = true and n.deleted_at is null
           limit 1
         `,
         [send.sendSmtpNodeId, send.routingRuleVersion],
       );
 
       if (byId.rows[0]) {
-        return byId.rows[0];
+        return {
+          nodes: byId.rows,
+          routingRuleVersion: send.routingRuleVersion,
+        };
       }
     }
 
@@ -169,35 +178,43 @@ export const createWorkerPersistence = (pool: Pool) => ({
 
     const exact = await pool.query<RouteRecord>(
       `
-        select r.send_smtp_node_id as "nodeId", n.host, n.port, n.username,
+        select fn.send_smtp_node_id as "nodeId", n.host, n.port, n.username,
                n.password_secret_ref as "passwordSecretRef", r.version as "routingRuleVersion"
         from routing_rules r
-        inner join send_smtp_nodes n on n.id = r.send_smtp_node_id
-        where r.version = $1 and r.match_type = 'exact' and r.domain = $2 and r.is_active = true and n.is_active = true
-        order by r.priority asc, n.priority desc, r.id asc
-        limit 1
+        inner join routing_rule_failover_nodes fn on fn.routing_rule_id = r.id
+        inner join send_smtp_nodes n on n.id = fn.send_smtp_node_id
+        where r.version = $1 and r.match_type = 'exact' and r.domain = $2 and r.is_active = true and n.is_active = true and n.deleted_at is null
+        order by r.priority asc, r.id asc, fn.position asc
       `,
       [selectedVersion, domain],
     );
 
     if (exact.rows[0]) {
-      return exact.rows[0];
+      return {
+        nodes: exact.rows,
+        routingRuleVersion: exact.rows[0].routingRuleVersion,
+      };
     }
 
     const fallback = await pool.query<RouteRecord>(
       `
-        select r.send_smtp_node_id as "nodeId", n.host, n.port, n.username,
+        select fn.send_smtp_node_id as "nodeId", n.host, n.port, n.username,
                n.password_secret_ref as "passwordSecretRef", r.version as "routingRuleVersion"
         from routing_rules r
-        inner join send_smtp_nodes n on n.id = r.send_smtp_node_id
-        where r.version = $1 and r.match_type = 'default' and r.domain is null and r.is_active = true and n.is_active = true
-        order by r.priority asc, n.priority desc, r.id asc
-        limit 1
+        inner join routing_rule_failover_nodes fn on fn.routing_rule_id = r.id
+        inner join send_smtp_nodes n on n.id = fn.send_smtp_node_id
+        where r.version = $1 and r.match_type = 'default' and r.domain is null and r.is_active = true and n.is_active = true and n.deleted_at is null
+        order by r.priority asc, r.id asc, fn.position asc
       `,
       [selectedVersion],
     );
 
-    return fallback.rows[0] ?? null;
+    return fallback.rows[0]
+      ? {
+          nodes: fallback.rows,
+          routingRuleVersion: fallback.rows[0].routingRuleVersion,
+        }
+      : null;
   },
   getNextAttemptNumber: async (sendId: string): Promise<number> => {
     const result = await pool.query<{ value: number }>(

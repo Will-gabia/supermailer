@@ -14,21 +14,21 @@ describe('apiKeyViewQuery', () => {
 
   it('filters invalid scopes and falls back to defaults', () => {
     expect(parseApiKeyViewFromSearch('?scope=weird')).toEqual({
-      scopes: ['subscriber-sync'],
+      scopes: ['individual-send'],
     });
   });
 
   it('serializes no query string for the default scopes', () => {
-    expect(buildApiKeyViewSearch({ scopes: ['subscriber-sync'] })).toBe('');
+    expect(buildApiKeyViewSearch({ scopes: ['individual-send'] })).toBe('');
   });
 
-  it('round-trips multiple scopes', () => {
+  it('round-trips single allowed scope', () => {
     const state: ApiKeyViewQueryState = {
-      scopes: ['campaign-send', 'individual-send'],
+      scopes: ['individual-send'],
     };
 
     expect(parseApiKeyViewFromSearch(buildApiKeyViewSearch(state))).toEqual({
-      scopes: ['campaign-send', 'individual-send'],
+      scopes: ['individual-send'],
     });
   });
 });

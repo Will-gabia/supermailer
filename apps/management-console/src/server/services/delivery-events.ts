@@ -342,6 +342,7 @@ const deliverOutboundResultWebhook = async (
       id: string;
       kind: string;
       recipientEmail: string;
+      callbackEndpointId?: string | null;
       status: string;
     };
     deliveryEvent: {
@@ -376,6 +377,16 @@ const deliverOutboundResultWebhook = async (
     );
 
   if (!webhookDelivery) {
+    return;
+  }
+
+  const callbackEndpoint = input.send.callbackEndpointId
+    ? await appContext.repositories.callbackEndpoints.findById(
+        input.send.callbackEndpointId,
+      )
+    : null;
+
+  if (callbackEndpoint && !callbackEndpoint.isActive) {
     return;
   }
 
@@ -532,6 +543,7 @@ export const ingestDeliveryEvent = async (
         id: send.id,
         kind: send.kind,
         recipientEmail: send.recipientEmail,
+        callbackEndpointId: send.callbackEndpointId,
         status: nextStatus,
       },
       deliveryEvent: persistedEvent,

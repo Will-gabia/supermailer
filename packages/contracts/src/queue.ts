@@ -1,6 +1,5 @@
 export const SUPERMAILER_QUEUE_NAMES = {
   sendDispatch: 'send-dispatch',
-  subscriberSync: 'subscriber-sync',
 } as const;
 
 export type SupermailerQueueName =
@@ -8,10 +7,6 @@ export type SupermailerQueueName =
 
 export type SendDispatchJob = {
   sendId: string;
-};
-
-export type SubscriberSyncJob = {
-  syncRunId: string;
 };
 
 export const SEND_DISPATCH_RETRY_DELAYS_MS = [
@@ -23,6 +18,3 @@ export const SEND_DISPATCH_RETRY_BACKOFF_TYPE = 'fixed-capped-exponential';
 
 export const createSendDispatchJobId = (sendId: string): string =>
   `send-${sendId}`;
-
-export const createSubscriberSyncJobId = (syncRunId: string): string =>
-  `sync-${syncRunId}`;

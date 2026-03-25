@@ -108,3 +108,45 @@
 - 2026-03-23: The top-level README production example should include `--env-file .env.production` because `compose.production.yml` requires external infra variables and is not runnable as-is without the production env file.
 - 2026-03-23: Top-level docs are clearer when they standardize on the root workspace wrapper `pnpm e2e`; it matches `package.json` while still invoking Playwright under the hood.
 - 2026-03-23: README and OPERATIONS stay easier to trust when they present the same production bring-up order: `.env.production` preparation first, then `docker compose ... build`, then `docker compose ... up -d`, then health checks.
+- 2026-03-23: The subscriber screen works better for low-context operators when saved groups are the primary list/detail object and suppression states like `hard_bounce` stay visible only as per-recipient delivery restrictions, not as pseudo-groups.
+- 2026-03-23: After the group-first subscriber redesign, the safest cleanup was to keep Playwright anchored to stable visible controls already present in the UI (`이름 입력`, exact `추가`) instead of widening the implementation just to preserve old test selectors.
+- 2026-03-23: The cleanest send-only boundary in this repo was additive-first on the backend: keep the existing Postfix correlation and delivery-event ingestion spine, add pre-registered callback endpoints plus `updatedSince` result polling, and only then reduce the console and supported tests.
+- 2026-03-23: For this codebase, a send-only operator console is simpler and more stable when it sends raw rendered subject/html/text directly and treats webhook delivery as optional status fanout, rather than depending on template, subscriber, or campaign builders in the UI.
+- 2026-03-23: Once the send-only paths were green, the safest full purge was to delete obsolete subscriber/template/query helper files and tests in the same phase as the docs rewrite, so the repository description, test surface, and runtime boundary all converged together instead of drifting again.
+- 2026-03-23: Client-facing integration docs were most reliable when written from the live route/tests contract outward: `openapi.yaml` for machine consumption, `CLIENT_API.md` for curl-first onboarding, and top-level doc links kept as pointers instead of duplicating the contract inline.
+- 2026-03-24: The safest sequence for the send-engine follow-up was to land admin send-history pagination/search and SMTP node operations before raw EML, then add `eml_snapshot` while preserving extracted `recipientEmail` and `subjectSnapshot` as the searchable/admin-facing metadata.
+- 2026-03-24: Once the manual admin send form was removed, all browser tests had to seed sends through the real external API plus explicit callback-endpoint registration; otherwise the specs kept accidentally depending on deleted admin-only behavior.
+
+## 2026-03-24 — strict EML-only external send contract
+
+- `/api/sends` now rejects requests without `eml` and no longer falls back to `to` / `subject` / `html` payload handling.
+- Contract docs must stay aligned across `openapi.yaml`, `CLIENT_API.md`, and top-level guides because the old mixed wording was easy to miss after the raw EML path shipped.
+- Admin `/sends` documentation should describe history/inspection only; send creation remains an external API concern.
+
+## 2026-03-24 — docs must track shipped admin behaviors, not just API contract
+
+- After the API contract stabilized, the remaining doc drift was mostly in operator-facing guides (`README.md`, `INSTALL.md`, `OPERATIONS.md`) rather than `openapi.yaml` or `CLIENT_API.md`.
+- The admin console documentation now needs to describe searchable/paginated send history and the routing/reporting section-tab navigation because those are part of the actual operator workflow.
+- The README intro should explicitly say clients send raw RFC 822 / EML, otherwise it still reads like a rendered subject/body API even when the detailed examples are correct.
+
+## 2026-03-24 — SMTP node delete should preserve history via tombstones
+
+- Allowing admins to delete SMTP nodes that appear in historical sends/attempts is safest with a dedicated `deleted_at` tombstone field, not by overloading `is_active`.
+- Live routing/selection paths must filter both `is_active = true` and `deleted_at is null`, while historical reads can keep referencing the preserved row.
+- For operator-facing admin fetches, `fetch(..., { cache: 'no-store' })` avoids stale browser state after destructive actions like revoke/delete.
+
+## 2026-03-24 — API key management needs metadata lifecycle, not secret replay
+
+- The admin console can safely list issued API keys using label, prefix, scopes, `lastUsedAt`, and `revokedAt`, but the raw secret must remain one-time reveal only.
+- `revokedAt` already matched the backend auth model, so adding list/revoke UI was mostly a route/repository/admin-screen problem rather than a schema redesign.
+
+## 2026-03-24 — API key lifecycle can support both revoke and delete
+
+- In this repo, API key revocation and deletion are distinct admin actions: `revokedAt` is useful for immediate auth invalidation, while hard delete is acceptable because current schema has no downstream foreign-key dependencies on `api_keys`.
+- The access-keys screen works more reliably when destructive actions refresh the server list after success instead of relying purely on optimistic local row updates.
+
+## 2026-03-24 — routing failover works best as ordered child rows, not duplicated rules
+
+- Keeping `routing_rules` as the versioned rule record and storing ordered relay members in a child table lets the worker resolve a failover chain without breaking historical `sends.send_smtp_node_id` and `send_dispatch_attempts.send_smtp_node_id` tracking.
+- The admin route parser must explicitly pass `failoverNodeIds`; otherwise the UI can appear to save a chain while the backend silently persists only the primary node.
+- For dispatch semantics, transient failures should advance to the next node in the chain before queue-level retry delays begin.

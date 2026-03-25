@@ -4,19 +4,9 @@ import { Hono } from 'hono';
 import type { ManagementConsoleAppContext } from '../app-context';
 import type { AppVariables } from '../app-types';
 import { createApiKeyRecord, requireAdminSession } from '../auth';
-import {
-  enqueueCampaignSend,
-  enqueueIndividualSend,
-} from '../services/send-enqueue';
-import { deleteSubscriberSafely } from '../services/subscriber-delete';
-import { getSubscriberEligibility } from '../services/subscriber-eligibility';
-import { runSubscriberSync } from '../services/subscriber-sync';
+import { probeSmtpNode } from '../services/smtp-node-probe';
 
-const ALLOWED_API_KEY_SCOPES = [
-  'subscriber-sync',
-  'individual-send',
-  'campaign-send',
-] as const;
+const ALLOWED_API_KEY_SCOPES = ['individual-send'] as const;
 
 const isAllowedScope = (
   scope: string,
@@ -24,18 +14,6 @@ const isAllowedScope = (
   ALLOWED_API_KEY_SCOPES.includes(
     scope as (typeof ALLOWED_API_KEY_SCOPES)[number],
   );
-
-const toStringRecord = (value: unknown): Record<string, string> | undefined => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return undefined;
-  }
-
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>).filter(
-      ([, entryValue]) => typeof entryValue === 'string',
-    ),
-  ) as Record<string, string>;
-};
 
 const parseNumericField = (value: unknown): number | null => {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -58,452 +36,6 @@ const isPgUniqueViolation = (
 export const createAdminRouter = (appContext: ManagementConsoleAppContext) => {
   const router = new Hono<{ Variables: AppVariables }>();
 
-  router.get(
-    '/subscribers',
-    requireAdminSession(appContext),
-    async (context) => {
-      const subscribers = await appContext.repositories.subscribers.list();
-      const membershipRows =
-        await appContext.repositories.subscriberGroupMemberships.listForSubscriberIds(
-          subscribers.map((subscriber) => subscriber.id),
-        );
-      const suppressionRecords =
-        await appContext.repositories.suppressions.listByEmails(
-          subscribers.map((subscriber) => subscriber.email),
-        );
-      const suppressionMap = new Map<string, string[]>();
-      const groupsMap = new Map<string, { id: string; name: string }[]>();
-
-      for (const membership of membershipRows) {
-        groupsMap.set(membership.subscriberId, [
-          ...(groupsMap.get(membership.subscriberId) ?? []),
-          {
-            id: membership.groupId,
-            name: membership.groupName,
-          },
-        ]);
-      }
-
-      for (const suppression of suppressionRecords) {
-        suppressionMap.set(suppression.email, [
-          ...(suppressionMap.get(suppression.email) ?? []),
-          suppression.reason,
-        ]);
-      }
-
-      return context.json({
-        data: subscribers.map((subscriber) => ({
-          id: subscriber.id,
-          email: subscriber.email,
-          displayName: subscriber.displayName,
-          status: subscriber.status,
-          sourceKey: subscriber.sourceKey,
-          externalId: subscriber.externalId,
-          isUnsubscribed: subscriber.unsubscribedAt !== null,
-          unsubscribedAt: subscriber.unsubscribedAt,
-          lastSyncedAt: subscriber.lastSyncedAt,
-          eligible:
-            subscriber.unsubscribedAt === null &&
-            !(suppressionMap.get(subscriber.email) ?? []).includes(
-              'hard_bounce',
-            ),
-          eligibilityReason: subscriber.unsubscribedAt
-            ? 'unsubscribed'
-            : (suppressionMap.get(subscriber.email) ?? []).includes(
-                  'hard_bounce',
-                )
-              ? 'hard_bounce_suppression'
-              : null,
-          suppressionReasons: suppressionMap.get(subscriber.email) ?? [],
-          groups: groupsMap.get(subscriber.id) ?? [],
-        })),
-      });
-    },
-  );
-
-  router.post(
-    '/subscribers',
-    requireAdminSession(appContext),
-    async (context) => {
-      const body = (await context.req.json().catch(() => null)) as {
-        email?: unknown;
-        displayName?: unknown;
-      } | null;
-      const email = typeof body?.email === 'string' ? body.email : '';
-      const displayName =
-        typeof body?.displayName === 'string' ? body.displayName.trim() : null;
-
-      if (!email.trim()) {
-        return context.json(
-          { code: 'validation_error', message: 'Email is required' },
-          400,
-        );
-      }
-
-      const subscriber = await appContext.repositories.subscribers.create({
-        id: createUlid(),
-        email,
-        displayName,
-      });
-
-      return context.json({ data: subscriber }, 201);
-    },
-  );
-
-  router.patch(
-    '/subscribers/:subscriberId',
-    requireAdminSession(appContext),
-    async (context) => {
-      const subscriber = await appContext.repositories.subscribers.findById(
-        context.req.param('subscriberId'),
-      );
-
-      if (!subscriber) {
-        return context.json(
-          { code: 'not_found', message: 'Subscriber not found' },
-          404,
-        );
-      }
-
-      const body = (await context.req.json().catch(() => null)) as {
-        email?: unknown;
-        displayName?: unknown;
-        unsubscribed?: unknown;
-      } | null;
-
-      const updated = await appContext.repositories.subscribers.update(
-        subscriber.id,
-        {
-          email: typeof body?.email === 'string' ? body.email : undefined,
-          displayName:
-            typeof body?.displayName === 'string'
-              ? body.displayName.trim()
-              : undefined,
-          unsubscribedAt:
-            typeof body?.unsubscribed === 'boolean'
-              ? body.unsubscribed
-                ? new Date()
-                : null
-              : undefined,
-        },
-      );
-
-      return context.json({ data: updated });
-    },
-  );
-
-  router.post(
-    '/subscribers/:subscriberId/suppressions',
-    requireAdminSession(appContext),
-    async (context) => {
-      const subscriber = await appContext.repositories.subscribers.findById(
-        context.req.param('subscriberId'),
-      );
-
-      if (!subscriber) {
-        return context.json(
-          { code: 'not_found', message: 'Subscriber not found' },
-          404,
-        );
-      }
-
-      const body = (await context.req.json().catch(() => null)) as {
-        reason?: unknown;
-        sourceEventId?: unknown;
-      } | null;
-      const reason = typeof body?.reason === 'string' ? body.reason.trim() : '';
-
-      if (reason !== 'hard_bounce') {
-        return context.json(
-          {
-            code: 'validation_error',
-            message: 'Only hard_bounce suppression is supported',
-          },
-          400,
-        );
-      }
-
-      const suppression = await appContext.repositories.suppressions.create({
-        id: createUlid(),
-        email: subscriber.email,
-        reason,
-        sourceEventId:
-          typeof body?.sourceEventId === 'string' ? body.sourceEventId : null,
-      });
-
-      return context.json({ data: suppression }, 201);
-    },
-  );
-
-  router.delete(
-    '/subscribers/:subscriberId',
-    requireAdminSession(appContext),
-    async (context) => {
-      const deleted = await deleteSubscriberSafely(
-        appContext,
-        context.req.param('subscriberId'),
-      );
-
-      if (!deleted) {
-        return context.json(
-          { code: 'not_found', message: 'Subscriber not found' },
-          404,
-        );
-      }
-
-      return context.body(null, 204);
-    },
-  );
-
-  router.put(
-    '/subscribers/:subscriberId/groups',
-    requireAdminSession(appContext),
-    async (context) => {
-      const subscriber = await appContext.repositories.subscribers.findById(
-        context.req.param('subscriberId'),
-      );
-
-      if (!subscriber) {
-        return context.json(
-          { code: 'not_found', message: 'Subscriber not found' },
-          404,
-        );
-      }
-
-      const body = (await context.req.json().catch(() => null)) as {
-        groupIds?: unknown;
-      } | null;
-      const groupIds = Array.isArray(body?.groupIds)
-        ? body.groupIds.filter(
-            (value): value is string => typeof value === 'string',
-          )
-        : null;
-
-      if (groupIds === null) {
-        return context.json(
-          { code: 'validation_error', message: 'groupIds array is required' },
-          400,
-        );
-      }
-
-      const allGroups = await appContext.repositories.subscriberGroups.list();
-      const knownGroupIds = new Set(allGroups.map((group) => group.id));
-      const uniqueGroupIds = Array.from(new Set(groupIds));
-      const missingGroupIds = uniqueGroupIds.filter(
-        (groupId) => !knownGroupIds.has(groupId),
-      );
-
-      if (missingGroupIds.length > 0) {
-        return context.json(
-          {
-            code: 'validation_error',
-            message: 'Some groups do not exist',
-            details: { missingGroupIds },
-          },
-          400,
-        );
-      }
-
-      await appContext.repositories.subscriberGroupMemberships.replaceForSubscriber(
-        {
-          subscriberId: subscriber.id,
-          groupIds: uniqueGroupIds,
-        },
-      );
-
-      const memberships =
-        await appContext.repositories.subscriberGroupMemberships.listForSubscriberIds(
-          [subscriber.id],
-        );
-
-      return context.json({
-        data: memberships.map((membership) => ({
-          id: membership.groupId,
-          name: membership.groupName,
-        })),
-      });
-    },
-  );
-
-  router.get(
-    '/subscriber-groups',
-    requireAdminSession(appContext),
-    async (context) => {
-      const groups = await appContext.repositories.subscriberGroups.list();
-      return context.json({ data: groups });
-    },
-  );
-
-  router.post(
-    '/subscriber-groups',
-    requireAdminSession(appContext),
-    async (context) => {
-      const body = (await context.req.json().catch(() => null)) as {
-        name?: unknown;
-      } | null;
-      const name = typeof body?.name === 'string' ? body.name.trim() : '';
-
-      if (!name) {
-        return context.json(
-          { code: 'validation_error', message: 'name is required' },
-          400,
-        );
-      }
-
-      try {
-        const group = await appContext.repositories.subscriberGroups.create({
-          id: createUlid(),
-          name,
-        });
-
-        return context.json({ data: group }, 201);
-      } catch (error) {
-        if (isPgUniqueViolation(error)) {
-          return context.json(
-            { code: 'conflict', message: 'Group name already exists' },
-            409,
-          );
-        }
-
-        throw error;
-      }
-    },
-  );
-
-  router.patch(
-    '/subscriber-groups/:groupId',
-    requireAdminSession(appContext),
-    async (context) => {
-      const group = await appContext.repositories.subscriberGroups.findById(
-        context.req.param('groupId'),
-      );
-
-      if (!group) {
-        return context.json(
-          { code: 'not_found', message: 'Group not found' },
-          404,
-        );
-      }
-
-      const body = (await context.req.json().catch(() => null)) as {
-        name?: unknown;
-      } | null;
-      const name = typeof body?.name === 'string' ? body.name.trim() : '';
-
-      if (!name) {
-        return context.json(
-          { code: 'validation_error', message: 'name is required' },
-          400,
-        );
-      }
-
-      try {
-        const updated = await appContext.repositories.subscriberGroups.update(
-          group.id,
-          {
-            name,
-          },
-        );
-
-        return context.json({ data: updated });
-      } catch (error) {
-        if (isPgUniqueViolation(error)) {
-          return context.json(
-            { code: 'conflict', message: 'Group name already exists' },
-            409,
-          );
-        }
-
-        throw error;
-      }
-    },
-  );
-
-  router.delete(
-    '/subscriber-groups/:groupId',
-    requireAdminSession(appContext),
-    async (context) => {
-      const group = await appContext.repositories.subscriberGroups.findById(
-        context.req.param('groupId'),
-      );
-
-      if (!group) {
-        return context.json(
-          { code: 'not_found', message: 'Group not found' },
-          404,
-        );
-      }
-
-      await appContext.repositories.subscriberGroups.delete(group.id);
-      return context.body(null, 204);
-    },
-  );
-
-  router.get(
-    '/admin/subscriber-eligibility',
-    requireAdminSession(appContext),
-    async (context) => {
-      const email = context.req.query('email') ?? '';
-
-      if (!email.trim()) {
-        return context.json(
-          { code: 'validation_error', message: 'email is required' },
-          400,
-        );
-      }
-
-      const eligibility = await getSubscriberEligibility(appContext, email);
-
-      return context.json({ data: { email, ...eligibility } });
-    },
-  );
-
-  router.get('/sync-runs', requireAdminSession(appContext), async (context) => {
-    const syncRuns = await appContext.repositories.syncRuns.list();
-    const data = await Promise.all(
-      syncRuns.map(async (syncRun) => ({
-        ...syncRun,
-        records: await appContext.repositories.syncRunRecords.listForRun(
-          syncRun.id,
-        ),
-      })),
-    );
-
-    return context.json({ data });
-  });
-
-  router.post(
-    '/admin/subscriber-sync-runs',
-    requireAdminSession(appContext),
-    async (context) => {
-      const body = (await context.req.json().catch(() => null)) as {
-        sourceKey?: unknown;
-        endpointUrl?: unknown;
-        headers?: unknown;
-      } | null;
-
-      try {
-        const result = await runSubscriberSync(appContext, {
-          sourceKey: typeof body?.sourceKey === 'string' ? body.sourceKey : '',
-          endpointUrl:
-            typeof body?.endpointUrl === 'string' ? body.endpointUrl : '',
-          headers: toStringRecord(body?.headers),
-        });
-
-        return context.json({ data: result }, 201);
-      } catch (error) {
-        return context.json(
-          {
-            code: 'validation_error',
-            message:
-              error instanceof Error ? error.message : 'Subscriber sync failed',
-          },
-          400,
-        );
-      }
-    },
-  );
-
   router.get('/api-keys', requireAdminSession(appContext), async (context) => {
     const apiKeys = await appContext.repositories.apiKeys.list();
 
@@ -514,10 +46,103 @@ export const createAdminRouter = (appContext: ManagementConsoleAppContext) => {
         keyPrefix: apiKey.keyPrefix,
         scopes: apiKey.scopes ?? [],
         lastUsedAt: apiKey.lastUsedAt,
+        revokedAt: apiKey.revokedAt,
         createdAt: apiKey.createdAt,
       })),
     });
   });
+
+  router.post(
+    '/api-keys/:apiKeyId/revoke',
+    requireAdminSession(appContext),
+    async (context) => {
+      const apiKeyId = context.req.param('apiKeyId');
+      const existing = await appContext.repositories.apiKeys.list();
+      const target = existing.find((apiKey) => apiKey.id === apiKeyId) ?? null;
+
+      if (!target) {
+        return context.json(
+          { code: 'not_found', message: 'API key not found' },
+          404,
+        );
+      }
+
+      if (target.revokedAt) {
+        return context.json({
+          data: {
+            id: target.id,
+            label: target.label,
+            keyPrefix: target.keyPrefix,
+            scopes: target.scopes ?? [],
+            lastUsedAt: target.lastUsedAt,
+            revokedAt: target.revokedAt,
+            createdAt: target.createdAt,
+          },
+        });
+      }
+
+      const revoked = await appContext.repositories.apiKeys.revoke(apiKeyId);
+      const adminUser = context.get('adminUser');
+
+      await appContext.repositories.auditLogs.append({
+        id: createUlid(),
+        eventType: 'api_key_revoked',
+        actorType: 'admin_user',
+        actorId: adminUser.id,
+        actorIdentifier: adminUser.email,
+        metadata: {
+          apiKeyId: target.id,
+          keyPrefix: target.keyPrefix,
+        },
+      });
+
+      return context.json({
+        data: {
+          id: revoked?.id ?? target.id,
+          label: revoked?.label ?? target.label,
+          keyPrefix: revoked?.keyPrefix ?? target.keyPrefix,
+          scopes: revoked?.scopes ?? target.scopes ?? [],
+          lastUsedAt: revoked?.lastUsedAt ?? target.lastUsedAt,
+          revokedAt: revoked?.revokedAt ?? target.revokedAt,
+          createdAt: revoked?.createdAt ?? target.createdAt,
+        },
+      });
+    },
+  );
+
+  router.delete(
+    '/api-keys/:apiKeyId',
+    requireAdminSession(appContext),
+    async (context) => {
+      const apiKeyId = context.req.param('apiKeyId');
+      const existing = await appContext.repositories.apiKeys.list();
+      const target = existing.find((apiKey) => apiKey.id === apiKeyId) ?? null;
+
+      if (!target) {
+        return context.json(
+          { code: 'not_found', message: 'API key not found' },
+          404,
+        );
+      }
+
+      await appContext.repositories.apiKeys.deleteById(apiKeyId);
+      const adminUser = context.get('adminUser');
+
+      await appContext.repositories.auditLogs.append({
+        id: createUlid(),
+        eventType: 'api_key_deleted',
+        actorType: 'admin_user',
+        actorId: adminUser.id,
+        actorIdentifier: adminUser.email,
+        metadata: {
+          apiKeyId: target.id,
+          keyPrefix: target.keyPrefix,
+        },
+      });
+
+      return context.body(null, 204);
+    },
+  );
 
   router.post('/api-keys', requireAdminSession(appContext), async (context) => {
     const body = (await context.req.json().catch(() => null)) as {
@@ -578,190 +203,6 @@ export const createAdminRouter = (appContext: ManagementConsoleAppContext) => {
       201,
     );
   });
-
-  router.get('/templates', requireAdminSession(appContext), async (context) => {
-    const templates = await appContext.repositories.templates.list();
-    return context.json({ data: templates });
-  });
-
-  router.get(
-    '/templates/:templateId',
-    requireAdminSession(appContext),
-    async (context) => {
-      const template = await appContext.repositories.templates.findById(
-        context.req.param('templateId'),
-      );
-      if (!template) {
-        return context.json(
-          { code: 'not_found', message: 'Template not found' },
-          404,
-        );
-      }
-      return context.json({ data: template });
-    },
-  );
-
-  router.post(
-    '/templates',
-    requireAdminSession(appContext),
-    async (context) => {
-      const body = (await context.req.json().catch(() => null)) as {
-        name?: unknown;
-        subject?: unknown;
-        html?: unknown;
-        textContent?: unknown;
-      } | null;
-
-      const name = typeof body?.name === 'string' ? body.name.trim() : '';
-      const subject =
-        typeof body?.subject === 'string' ? body.subject.trim() : '';
-      const html = typeof body?.html === 'string' ? body.html.trim() : '';
-      const textContent =
-        typeof body?.textContent === 'string' ? body.textContent.trim() : null;
-
-      if (!name || !subject || !html) {
-        return context.json(
-          {
-            code: 'validation_error',
-            message: 'Name, subject, and html are required',
-          },
-          400,
-        );
-      }
-
-      const { extractVariables } = await import('../services/template-preview');
-
-      const subjectVars = extractVariables(subject);
-      const htmlVars = extractVariables(html);
-      const textVars = textContent ? extractVariables(textContent) : [];
-
-      const variables = Array.from(
-        new Set([...subjectVars, ...htmlVars, ...textVars]),
-      );
-
-      try {
-        const template = await appContext.repositories.templates.create({
-          id: createUlid(),
-          name,
-          subject,
-          html,
-          textContent,
-          variables,
-        });
-
-        return context.json({ data: template }, 201);
-      } catch (err: unknown) {
-        if (err instanceof Error && 'code' in err && err.code === '23505') {
-          // unique constraint violation in pg
-          return context.json(
-            { code: 'conflict', message: 'Template name already exists' },
-            409,
-          );
-        }
-        throw err;
-      }
-    },
-  );
-
-  router.patch(
-    '/templates/:templateId',
-    requireAdminSession(appContext),
-    async (context) => {
-      const template = await appContext.repositories.templates.findById(
-        context.req.param('templateId'),
-      );
-      if (!template) {
-        return context.json(
-          { code: 'not_found', message: 'Template not found' },
-          404,
-        );
-      }
-
-      const body = (await context.req.json().catch(() => null)) as {
-        name?: unknown;
-        subject?: unknown;
-        html?: unknown;
-        textContent?: unknown;
-      } | null;
-
-      const name =
-        typeof body?.name === 'string' ? body.name.trim() : undefined;
-      const subject =
-        typeof body?.subject === 'string' ? body.subject.trim() : undefined;
-      const html =
-        typeof body?.html === 'string' ? body.html.trim() : undefined;
-      const textContent =
-        typeof body?.textContent === 'string'
-          ? body.textContent.trim()
-          : undefined;
-
-      const newSubject = subject ?? template.subject;
-      const newHtml = html ?? template.html;
-      const newTextContent =
-        textContent !== undefined ? textContent : template.textContent;
-
-      const { extractVariables } = await import('../services/template-preview');
-
-      const subjectVars = extractVariables(newSubject);
-      const htmlVars = extractVariables(newHtml);
-      const textVars = newTextContent ? extractVariables(newTextContent) : [];
-
-      const variables = Array.from(
-        new Set([...subjectVars, ...htmlVars, ...textVars]),
-      );
-
-      try {
-        const updated = await appContext.repositories.templates.update(
-          template.id,
-          {
-            name,
-            subject,
-            html,
-            textContent,
-            variables,
-          },
-        );
-
-        return context.json({ data: updated });
-      } catch (err: unknown) {
-        if (err instanceof Error && 'code' in err && err.code === '23505') {
-          return context.json(
-            { code: 'conflict', message: 'Template name already exists' },
-            409,
-          );
-        }
-        throw err;
-      }
-    },
-  );
-
-  router.post(
-    '/templates/preview',
-    requireAdminSession(appContext),
-    async (context) => {
-      const body = (await context.req.json().catch(() => null)) as {
-        subject?: unknown;
-        html?: unknown;
-        previewData?: unknown;
-      } | null;
-
-      const subject = typeof body?.subject === 'string' ? body.subject : '';
-      const html = typeof body?.html === 'string' ? body.html : '';
-      const previewData =
-        typeof body?.previewData === 'object' && body?.previewData !== null
-          ? (body.previewData as Record<string, string>)
-          : {};
-
-      const { renderTemplate } = await import('../services/template-preview');
-
-      return context.json({
-        data: {
-          subject: renderTemplate(subject, previewData),
-          html: renderTemplate(html, previewData),
-        },
-      });
-    },
-  );
 
   router.get(
     '/send-smtp-nodes',
@@ -917,6 +358,63 @@ export const createAdminRouter = (appContext: ManagementConsoleAppContext) => {
     },
   );
 
+  router.post(
+    '/send-smtp-nodes/:nodeId/test',
+    requireAdminSession(appContext),
+    async (context) => {
+      const nodeId = context.req.param('nodeId');
+      const node = await appContext.repositories.sendSmtpNodes.findById(nodeId);
+
+      if (!node) {
+        return context.json(
+          { code: 'not_found', message: 'SendSMTP node not found' },
+          404,
+        );
+      }
+
+      const result = await probeSmtpNode({
+        host: node.host,
+        port: node.port,
+      });
+
+      return context.json({ data: result });
+    },
+  );
+
+  router.delete(
+    '/send-smtp-nodes/:nodeId',
+    requireAdminSession(appContext),
+    async (context) => {
+      const nodeId = context.req.param('nodeId');
+      const node = await appContext.repositories.sendSmtpNodes.findById(nodeId);
+
+      if (!node) {
+        return context.json(
+          { code: 'not_found', message: 'SendSMTP node not found' },
+          404,
+        );
+      }
+
+      const referencedByRouting =
+        await appContext.repositories.routingRules.isNodeReferencedByLatestVersion(
+          nodeId,
+        );
+
+      if (referencedByRouting) {
+        return context.json(
+          {
+            code: 'conflict',
+            message: 'Node is referenced by the latest routing rules',
+          },
+          409,
+        );
+      }
+
+      await appContext.repositories.sendSmtpNodes.tombstoneById(nodeId);
+      return context.body(null, 204);
+    },
+  );
+
   router.get(
     '/routing-rules',
     requireAdminSession(appContext),
@@ -963,6 +461,11 @@ export const createAdminRouter = (appContext: ManagementConsoleAppContext) => {
                   typeof input.sendSmtpNodeId === 'string'
                     ? input.sendSmtpNodeId
                     : '',
+                failoverNodeIds: Array.isArray(input.failoverNodeIds)
+                  ? input.failoverNodeIds.filter(
+                      (nodeId): nodeId is string => typeof nodeId === 'string',
+                    )
+                  : undefined,
                 priority: parsedPriority ?? undefined,
                 isActive:
                   typeof input.isActive === 'boolean'
@@ -1007,135 +510,63 @@ export const createAdminRouter = (appContext: ManagementConsoleAppContext) => {
   );
 
   router.get('/sends', requireAdminSession(appContext), async (context) => {
-    const records = await appContext.repositories.sends.list();
-    return context.json({ data: records });
+    const search = (context.req.query('search') ?? '').trim();
+    const cursor = (context.req.query('cursor') ?? '').trim() || null;
+    const limitRaw = context.req.query('limit');
+    const pageRaw = context.req.query('page');
+    const limit =
+      typeof limitRaw === 'string' && limitRaw.trim()
+        ? Math.max(1, Math.min(Number.parseInt(limitRaw, 10) || 20, 100))
+        : 20;
+    const page =
+      typeof pageRaw === 'string' && pageRaw.trim()
+        ? Math.max(1, Number.parseInt(pageRaw, 10) || 1)
+        : 1;
+
+    if (cursor) {
+      const result = await appContext.repositories.sends.listAdminHistory({
+        search,
+        limit,
+        cursor,
+      });
+
+      return context.json({
+        ...result,
+        pageInfo: {
+          ...result.pageInfo,
+          page,
+        },
+      });
+    }
+
+    let currentCursor: string | null = null;
+    let result = await appContext.repositories.sends.listAdminHistory({
+      search,
+      limit,
+      cursor: currentCursor,
+    });
+
+    for (let currentPage = 1; currentPage < page; currentPage += 1) {
+      if (!result.pageInfo.hasMore || !result.pageInfo.nextCursor) {
+        break;
+      }
+
+      currentCursor = result.pageInfo.nextCursor;
+      result = await appContext.repositories.sends.listAdminHistory({
+        search,
+        limit,
+        cursor: currentCursor,
+      });
+    }
+
+    return context.json({
+      ...result,
+      pageInfo: {
+        ...result.pageInfo,
+        page,
+      },
+    });
   });
-
-  router.post(
-    '/admin/individual-sends',
-    requireAdminSession(appContext),
-    async (context) => {
-      const body = (await context.req.json().catch(() => null)) as {
-        to?: unknown;
-        templateId?: unknown;
-        subject?: unknown;
-        html?: unknown;
-        text?: unknown;
-        variables?: unknown;
-        webhookUrl?: unknown;
-        webhookSigningSecret?: unknown;
-      } | null;
-
-      const to = typeof body?.to === 'string' ? body.to : '';
-
-      if (!to.trim()) {
-        return context.json(
-          { code: 'validation_error', message: 'to is required' },
-          400,
-        );
-      }
-
-      try {
-        const result = await enqueueIndividualSend(
-          appContext,
-          {
-            enqueueSend: appContext.sendDispatchEnqueuer.enqueueSend,
-          },
-          {
-            to,
-            templateId:
-              typeof body?.templateId === 'string'
-                ? body.templateId
-                : undefined,
-            subject:
-              typeof body?.subject === 'string' ? body.subject : undefined,
-            html: typeof body?.html === 'string' ? body.html : undefined,
-            text: typeof body?.text === 'string' ? body.text : undefined,
-            variables: toStringRecord(body?.variables),
-            webhookUrl:
-              typeof body?.webhookUrl === 'string'
-                ? body.webhookUrl
-                : undefined,
-            webhookSigningSecret:
-              typeof body?.webhookSigningSecret === 'string'
-                ? body.webhookSigningSecret
-                : undefined,
-          },
-        );
-
-        return context.json({ data: result }, 202);
-      } catch (error) {
-        return context.json(
-          {
-            code: 'validation_error',
-            message: error instanceof Error ? error.message : 'Invalid request',
-          },
-          400,
-        );
-      }
-    },
-  );
-
-  router.post(
-    '/admin/campaign-sends',
-    requireAdminSession(appContext),
-    async (context) => {
-      const body = (await context.req.json().catch(() => null)) as {
-        campaignId?: unknown;
-        templateId?: unknown;
-        subject?: unknown;
-        html?: unknown;
-        text?: unknown;
-        variables?: unknown;
-        recipients?: unknown;
-        groupIds?: unknown;
-      } | null;
-
-      try {
-        const result = await enqueueCampaignSend(
-          appContext,
-          {
-            enqueueSend: appContext.sendDispatchEnqueuer.enqueueSend,
-          },
-          {
-            campaignId:
-              typeof body?.campaignId === 'string'
-                ? body.campaignId
-                : undefined,
-            templateId:
-              typeof body?.templateId === 'string'
-                ? body.templateId
-                : undefined,
-            subject:
-              typeof body?.subject === 'string' ? body.subject : undefined,
-            html: typeof body?.html === 'string' ? body.html : undefined,
-            text: typeof body?.text === 'string' ? body.text : undefined,
-            variables: toStringRecord(body?.variables),
-            recipients: Array.isArray(body?.recipients)
-              ? body.recipients.filter(
-                  (value): value is string => typeof value === 'string',
-                )
-              : [],
-            groupIds: Array.isArray(body?.groupIds)
-              ? body.groupIds.filter(
-                  (value): value is string => typeof value === 'string',
-                )
-              : [],
-          },
-        );
-
-        return context.json({ data: result }, 202);
-      } catch (error) {
-        return context.json(
-          {
-            code: 'validation_error',
-            message: error instanceof Error ? error.message : 'Invalid request',
-          },
-          400,
-        );
-      }
-    },
-  );
 
   return router;
 };

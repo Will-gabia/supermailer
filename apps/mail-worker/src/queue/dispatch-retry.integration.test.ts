@@ -232,4 +232,95 @@ describe('dispatch-retry integration', () => {
       await queue.close();
     }
   });
+
+  it('fails over to the next routing node before queue retrying transient failures', async () => {
+    if (!started) {
+      throw new Error('infra not ready');
+    }
+
+    const ready = started;
+    const pool = createWorkerDatabasePool(ready.databaseUrl);
+    await pool.query(
+      "insert into send_smtp_nodes (id, name, host, port, is_active, priority) values ('node_retry_secondary', 'node_retry_secondary', 'smtp.retry.secondary', 2526, true, 90)",
+    );
+    await pool.query(
+      "insert into routing_rules (id, version, match_type, domain, send_smtp_node_id, priority, is_active) values ('rule_retry_chain', 2, 'default', null, 'node_retry', 100, true)",
+    );
+    await pool.query(
+      "insert into routing_rule_failover_nodes (id, routing_rule_id, send_smtp_node_id, position) values ('rule_retry_chain:1', 'rule_retry_chain', 'node_retry', 1), ('rule_retry_chain:2', 'rule_retry_chain', 'node_retry_secondary', 2)",
+    );
+    await pool.query(
+      "insert into sends (id, kind, recipient_email, subject_snapshot, html_snapshot, text_snapshot, status, routing_rule_version, send_smtp_node_id, queue_job_id) values ('01HZYF8SEND000000000000FO', 'individual', 'failover@example.com', 'subject', '<p>failover</p>', 'failover', 'queued', 2, null, 'send-01HZYF8SEND000000000000FO')",
+    );
+    await pool.end();
+
+    const attemptedNodes: string[] = [];
+    const redisPrefix = createWorkerPrefix();
+    const queue = createSendDispatchQueue({
+      connection: createRedisConnectionOptions(ready.redisUrl),
+      prefix: redisPrefix,
+    });
+    const worker = createSendDispatchWorker({
+      redisConnection: createRedisConnectionOptions(ready.redisUrl),
+      redisPrefix,
+      databaseUrl: ready.databaseUrl,
+      retryDelaysMs: [5, 5, 5],
+      transport: {
+        dispatch: async (request) => {
+          attemptedNodes.push(request.smtpNode.id);
+          if (request.smtpNode.id === 'node_retry') {
+            return {
+              result: 'failed_transient',
+              smtpCode: '421',
+              enhancedCode: '4.7.0',
+              reason: '421 4.7.0 primary temporary failure',
+              rawPayload: { node: request.smtpNode.id },
+            };
+          }
+
+          return {
+            result: 'accepted',
+            smtpCode: '250',
+            enhancedCode: '2.0.0',
+            response: '250 2.0.0 queued after failover',
+            postfixQueueId: 'FAILOVERQID',
+            relayIdentity: `${request.smtpNode.host}:${request.smtpNode.port}`,
+            rawPayload: { node: request.smtpNode.id },
+          };
+        },
+      },
+    });
+
+    try {
+      await enqueueSendDispatchJob(queue, {
+        sendId: '01HZYF8SEND000000000000FO',
+      });
+
+      await waitFor(async () => {
+        expect(attemptedNodes).toEqual(['node_retry', 'node_retry_secondary']);
+      });
+
+      const assertPool = createWorkerDatabasePool(ready.databaseUrl);
+      const attempts = await assertPool.query<{
+        send_smtp_node_id: string;
+        status: string;
+      }>(
+        "select send_smtp_node_id, status from send_dispatch_attempts where send_id = '01HZYF8SEND000000000000FO' order by attempt_number asc",
+      );
+      const send = await assertPool.query<{ status: string }>(
+        "select status from sends where id = '01HZYF8SEND000000000000FO'",
+      );
+      await assertPool.end();
+
+      expect(send.rows[0]?.status).toBe('accepted_by_mta');
+      expect(attempts.rows).toEqual([
+        { send_smtp_node_id: 'node_retry', status: 'failed_transient' },
+        { send_smtp_node_id: 'node_retry_secondary', status: 'accepted' },
+      ]);
+    } finally {
+      await worker.close();
+      await queue.obliterate({ force: true });
+      await queue.close();
+    }
+  });
 });

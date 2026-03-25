@@ -37,8 +37,8 @@ describe('api-keys integration', () => {
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        label: 'Subscriber Sync Integration',
-        scopes: ['subscriber-sync'],
+        label: 'Individual Send Integration',
+        scopes: ['individual-send'],
       }),
     });
 
@@ -48,36 +48,54 @@ describe('api-keys integration', () => {
     };
 
     expect(payload.data.rawKey).toContain(payload.data.keyPrefix);
-    expect(payload.data.scopes).toEqual(['subscriber-sync']);
+    expect(payload.data.scopes).toEqual(['individual-send']);
 
-    const storedKey = await harness.appContext.repositories.apiKeys.findByKeyPrefix(payload.data.keyPrefix);
+    const storedKey =
+      await harness.appContext.repositories.apiKeys.findByKeyPrefix(
+        payload.data.keyPrefix,
+      );
     expect(storedKey).not.toBeNull();
     expect(storedKey?.keyHash).not.toBe(payload.data.rawKey);
     expect(storedKey?.lastUsedAt).toBeNull();
 
-    const allowedResponse = await harness.app.request('/api/subscriber-syncs', {
+    const allowedResponse = await harness.app.request('/api/individual-sends', {
       method: 'POST',
       headers: {
         'x-api-key': payload.data.rawKey,
         'content-type': 'application/json',
         'user-agent': 'vitest-api-key-allowed',
       },
-      body: JSON.stringify({ source: 'crm' }),
+      body: JSON.stringify({
+        to: 'alice@example.com',
+        subject: 'Hello',
+        html: '<p>Hello</p>',
+      }),
     });
 
     const allowedBody = await allowedResponse.json();
     expect(allowedResponse.status).toBe(202);
-    expect(allowedBody).toMatchObject({ status: 'accepted', scope: 'subscriber-sync' });
+    expect(allowedBody).toMatchObject({
+      status: 'queued',
+      scope: 'individual-send',
+    });
 
-    const updatedKey = await harness.appContext.repositories.apiKeys.findByKeyPrefix(payload.data.keyPrefix);
+    const updatedKey =
+      await harness.appContext.repositories.apiKeys.findByKeyPrefix(
+        payload.data.keyPrefix,
+      );
     expect(updatedKey?.lastUsedAt).instanceOf(Date);
 
-    const usageLogs = await harness.appContext.repositories.auditLogs.listByEventType('api_key_used');
+    const usageLogs =
+      await harness.appContext.repositories.auditLogs.listByEventType(
+        'api_key_used',
+      );
     expect(usageLogs).toHaveLength(1);
-    expect(usageLogs[0]).toMatchObject({ actorIdentifier: payload.data.keyPrefix });
+    expect(usageLogs[0]).toMatchObject({
+      actorIdentifier: payload.data.keyPrefix,
+    });
   });
 
-  it('enforces api key scopes and rejects invalid keys', async () => {
+  it('rejects invalid keys and records auth failure', async () => {
     const adminCookie = await loginAsAdmin();
     const createResponse = await harness.app.request('/api/api-keys', {
       method: 'POST',
@@ -95,18 +113,7 @@ describe('api-keys integration', () => {
       data: { rawKey: string; keyPrefix: string };
     };
 
-    const scopeDeniedResponse = await harness.app.request('/api/campaign-sends', {
-      method: 'POST',
-      headers: {
-        'x-api-key': payload.data.rawKey,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({ subject: 'Hello' }),
-    });
-
-    const scopeDeniedBody = await scopeDeniedResponse.json();
-    expect(scopeDeniedResponse.status).toBe(403);
-    expect(scopeDeniedBody).toMatchObject({ code: 'api_key_scope_denied' });
+    expect(payload.data.rawKey).toContain(payload.data.keyPrefix);
 
     const invalidResponse = await harness.app.request('/api/individual-sends', {
       method: 'POST',
@@ -118,11 +125,165 @@ describe('api-keys integration', () => {
     });
 
     expect(invalidResponse.status).toBe(401);
-    await expect(invalidResponse.json()).resolves.toMatchObject({ code: 'api_key_invalid' });
+    await expect(invalidResponse.json()).resolves.toMatchObject({
+      code: 'api_key_invalid',
+    });
 
-    const denialLogs = await harness.appContext.repositories.auditLogs.listByEventType('api_key_scope_denied');
-    expect(denialLogs).toHaveLength(1);
-    const failureLogs = await harness.appContext.repositories.auditLogs.listByEventType('api_key_auth_failure');
+    const failureLogs =
+      await harness.appContext.repositories.auditLogs.listByEventType(
+        'api_key_auth_failure',
+      );
     expect(failureLogs).toHaveLength(1);
+  });
+
+  it('lists api keys and revokes them for future authentication', async () => {
+    const adminCookie = await loginAsAdmin();
+    const createResponse = await harness.app.request('/api/api-keys', {
+      method: 'POST',
+      headers: {
+        cookie: adminCookie,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        label: 'Revocable Integration Key',
+        scopes: ['individual-send'],
+      }),
+    });
+
+    expect(createResponse.status).toBe(201);
+    const created = (await createResponse.json()) as {
+      data: { id: string; rawKey: string; keyPrefix: string };
+    };
+
+    const listResponse = await harness.app.request('/api/api-keys', {
+      headers: {
+        cookie: adminCookie,
+      },
+    });
+
+    expect(listResponse.status).toBe(200);
+    await expect(listResponse.json()).resolves.toMatchObject({
+      data: expect.arrayContaining([
+        expect.objectContaining({
+          id: created.data.id,
+          keyPrefix: created.data.keyPrefix,
+          revokedAt: null,
+        }),
+      ]),
+    });
+
+    const revokeResponse = await harness.app.request(
+      `/api/api-keys/${created.data.id}/revoke`,
+      {
+        method: 'POST',
+        headers: {
+          cookie: adminCookie,
+        },
+      },
+    );
+
+    expect(revokeResponse.status).toBe(200);
+    await expect(revokeResponse.json()).resolves.toMatchObject({
+      data: expect.objectContaining({
+        id: created.data.id,
+        revokedAt: expect.any(String),
+      }),
+    });
+
+    const deniedResponse = await harness.app.request('/api/sends', {
+      method: 'POST',
+      headers: {
+        'x-api-key': created.data.rawKey,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        eml: [
+          'From: sender@example.com',
+          'To: revoked@example.com',
+          'Subject: Revoked',
+          'MIME-Version: 1.0',
+          'Content-Type: text/plain; charset=utf-8',
+          '',
+          'Revoked key should fail',
+        ].join('\r\n'),
+      }),
+    });
+
+    expect(deniedResponse.status).toBe(401);
+    await expect(deniedResponse.json()).resolves.toMatchObject({
+      code: 'api_key_invalid',
+    });
+  });
+
+  it('deletes api keys and removes them from subsequent admin lists and auth', async () => {
+    const adminCookie = await loginAsAdmin();
+    const createResponse = await harness.app.request('/api/api-keys', {
+      method: 'POST',
+      headers: {
+        cookie: adminCookie,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        label: 'Deletable Integration Key',
+        scopes: ['individual-send'],
+      }),
+    });
+
+    expect(createResponse.status).toBe(201);
+    const created = (await createResponse.json()) as {
+      data: { id: string; rawKey: string; keyPrefix: string };
+    };
+
+    const deleteResponse = await harness.app.request(
+      `/api/api-keys/${created.data.id}`,
+      {
+        method: 'DELETE',
+        headers: {
+          cookie: adminCookie,
+        },
+      },
+    );
+
+    expect(deleteResponse.status).toBe(204);
+    await expect(
+      harness.appContext.repositories.apiKeys.findByKeyPrefix(
+        created.data.keyPrefix,
+      ),
+    ).resolves.toBeNull();
+
+    const listResponse = await harness.app.request('/api/api-keys', {
+      headers: {
+        cookie: adminCookie,
+      },
+    });
+    await expect(listResponse.json()).resolves.toMatchObject({
+      data: expect.not.arrayContaining([
+        expect.objectContaining({ id: created.data.id }),
+      ]),
+    });
+
+    const deniedResponse = await harness.app.request('/api/sends', {
+      method: 'POST',
+      headers: {
+        'x-api-key': created.data.rawKey,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        eml: [
+          'From: sender@example.com',
+          'To: deleted@example.com',
+          'Subject: Deleted',
+          'MIME-Version: 1.0',
+          'Content-Type: text/plain; charset=utf-8',
+          '',
+          'Deleted key should fail',
+        ].join('\r\n'),
+      }),
+    });
+
+    expect(deniedResponse.status).toBe(401);
+    await expect(deniedResponse.json()).resolves.toMatchObject({
+      code: 'api_key_invalid',
+    });
   });
 });

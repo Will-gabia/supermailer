@@ -1,20 +1,13 @@
-const allowedScopes = new Set([
-  'subscriber-sync',
-  'individual-send',
-  'campaign-send',
-]);
+const allowedScopes = new Set(['individual-send']);
 
-export type ApiKeyScope =
-  | 'subscriber-sync'
-  | 'individual-send'
-  | 'campaign-send';
+export type ApiKeyScope = 'individual-send';
 
 export type ApiKeyViewQueryState = {
   scopes: ApiKeyScope[];
 };
 
 export const defaultApiKeyViewQueryState: ApiKeyViewQueryState = {
-  scopes: ['subscriber-sync'],
+  scopes: ['individual-send'],
 };
 
 export const parseApiKeyViewFromSearch = (
@@ -30,7 +23,7 @@ export const parseApiKeyViewFromSearch = (
   );
 
   return {
-    scopes: scopes.length > 0 ? scopes : ['subscriber-sync'],
+    scopes: scopes.length > 0 ? scopes : ['individual-send'],
   };
 };
 

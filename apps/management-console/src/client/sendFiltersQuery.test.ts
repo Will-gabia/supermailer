@@ -19,6 +19,7 @@ describe('sendFiltersQuery', () => {
     ).toEqual({
       recipientQuery: 'alice@example.com',
       provenanceFilter: 'manual',
+      page: 1,
     });
   });
 
@@ -26,6 +27,21 @@ describe('sendFiltersQuery', () => {
     expect(parseSendFiltersFromSearch('?provenance=weird')).toEqual({
       recipientQuery: '',
       provenanceFilter: 'all',
+      page: 1,
+    });
+  });
+
+  it('parses positive page values and normalizes invalid ones', () => {
+    expect(parseSendFiltersFromSearch('?page=3')).toEqual({
+      recipientQuery: '',
+      provenanceFilter: 'all',
+      page: 3,
+    });
+
+    expect(parseSendFiltersFromSearch('?page=0')).toEqual({
+      recipientQuery: '',
+      provenanceFilter: 'all',
+      page: 1,
     });
   });
 
@@ -37,6 +53,7 @@ describe('sendFiltersQuery', () => {
     const state = {
       recipientQuery: 'VIP 고객',
       provenanceFilter: 'group' as const,
+      page: 2,
     };
 
     expect(parseSendFiltersFromSearch(buildSendFiltersSearch(state))).toEqual(

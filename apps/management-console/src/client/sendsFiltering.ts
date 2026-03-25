@@ -23,6 +23,10 @@ const matchesProvenanceFilter = (
     return true;
   }
 
+  if (send.kind === 'individual') {
+    return provenanceFilter === 'manual';
+  }
+
   if (send.kind !== 'campaign' || !send.audienceProvenance) {
     return false;
   }

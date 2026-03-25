@@ -10,6 +10,10 @@ import {
 } from '../db';
 import { createRepositories } from './index';
 
+const waitForTick = async () => {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+};
+
 describe('repositories integration', () => {
   let connectionString = '';
   let stopContainer: (() => Promise<void>) | undefined;
@@ -32,7 +36,7 @@ describe('repositories integration', () => {
     await stopContainer?.();
   });
 
-  it('persists foundation entities in Postgres', async () => {
+  it('persists send/routing/api-key entities in Postgres', async () => {
     const pool = createDatabasePool(connectionString);
 
     try {
@@ -42,19 +46,6 @@ describe('repositories integration', () => {
         createManagementConsoleDatabase(pool),
       );
 
-      const subscriber = await repositories.subscribers.create({
-        id: 'sub_01',
-        email: 'Alice@Example.com',
-        displayName: 'Alice',
-        metadata: { source: 'integration' },
-      });
-      const template = await repositories.templates.create({
-        id: 'tpl_01',
-        name: 'welcome',
-        subject: 'Hello',
-        html: '<p>Hello</p>',
-        variables: ['firstName'],
-      });
       const smtpNode = await repositories.sendSmtpNodes.create({
         id: 'node_01',
         name: 'smtp-default-1',
@@ -72,11 +63,11 @@ describe('repositories integration', () => {
       const send = await repositories.sends.create({
         id: 'send_01',
         kind: 'individual',
-        recipientEmail: subscriber.email,
-        subjectSnapshot: template.subject,
-        htmlSnapshot: template.html,
+        recipientEmail: 'alice@example.com',
+        subjectSnapshot: 'Hello',
+        htmlSnapshot: '<p>Hello</p>',
         status: 'queued',
-        templateId: template.id,
+        templateId: null,
         routingRuleVersion: rulesVersion,
         sendSmtpNodeId: smtpNode.id,
       });
@@ -117,23 +108,12 @@ describe('repositories integration', () => {
         label: 'integration',
         keyPrefix: 'sm_integration',
         keyHash: 'hash_01',
-        scopes: ['subscriber-sync', 'individual-send'],
+        scopes: ['individual-send'],
       });
       await repositories.apiKeys.markUsed(
         apiKey.id,
         new Date('2026-03-20T00:01:00.000Z'),
       );
-      const syncRun = await repositories.syncRuns.create({
-        id: 'sync_01',
-        sourceKey: 'crm',
-        status: 'running',
-        idempotencyKey: 'sync:crm:01',
-        stats: { imported: 1 },
-      });
-      await repositories.syncRuns.complete(syncRun.id, {
-        status: 'completed',
-        stats: { imported: 1, updated: 0 },
-      });
       await repositories.outboundWebhookDeliveries.create({
         id: 'wh_01',
         sendId: send.id,
@@ -143,15 +123,6 @@ describe('repositories integration', () => {
         payload: { sendId: send.id },
       });
 
-      await expect(
-        repositories.subscribers.findByEmail('alice@example.com'),
-      ).resolves.toMatchObject({
-        id: subscriber.id,
-        email: 'alice@example.com',
-      });
-      await expect(
-        repositories.templates.findById(template.id),
-      ).resolves.toMatchObject({ id: template.id, name: 'welcome' });
       await expect(repositories.sends.findById(send.id)).resolves.toMatchObject(
         {
           id: send.id,
@@ -171,6 +142,7 @@ describe('repositories integration', () => {
       await expect(
         repositories.sendSmtpNodes.listActive(),
       ).resolves.toHaveLength(1);
+      await expect(repositories.sendSmtpNodes.list()).resolves.toHaveLength(1);
       await expect(
         repositories.apiKeys.findByKeyHash('hash_01'),
       ).resolves.toMatchObject({
@@ -180,11 +152,118 @@ describe('repositories integration', () => {
         repositories.apiKeys.findByKeyPrefix('sm_integration'),
       ).resolves.toMatchObject({ id: apiKey.id });
       await expect(
-        repositories.syncRuns.findById(syncRun.id),
-      ).resolves.toMatchObject({ status: 'completed' });
+        repositories.apiKeys.revoke(apiKey.id),
+      ).resolves.toMatchObject({
+        id: apiKey.id,
+        revokedAt: expect.any(Date),
+      });
       await expect(
         repositories.outboundWebhookDeliveries.listForSend(send.id),
       ).resolves.toHaveLength(1);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it('supports paginated searchable admin send history queries', async () => {
+    const pool = createDatabasePool(connectionString);
+
+    try {
+      await runMigrations(pool);
+
+      const repositories = createRepositories(
+        createManagementConsoleDatabase(pool),
+      );
+
+      await repositories.sends.create({
+        id: 'send_hist_repo_001',
+        kind: 'individual',
+        recipientEmail: 'history-alice@example.com',
+        subjectSnapshot: 'Hello Alice 1',
+        htmlSnapshot: '<p>Hello Alice 1</p>',
+        status: 'queued',
+        templateId: null,
+      });
+      await waitForTick();
+      await repositories.sends.create({
+        id: 'send_hist_repo_002',
+        kind: 'individual',
+        recipientEmail: 'bob@example.com',
+        subjectSnapshot: 'Hello Bob',
+        htmlSnapshot: '<p>Hello Bob</p>',
+        status: 'queued',
+        templateId: null,
+      });
+      await waitForTick();
+      await repositories.sends.create({
+        id: 'send_hist_repo_003',
+        kind: 'individual',
+        recipientEmail: 'history-alice-latest@example.com',
+        subjectSnapshot: 'Hello Alice 2',
+        htmlSnapshot: '<p>Hello Alice 2</p>',
+        status: 'accepted_by_mta',
+        templateId: null,
+      });
+
+      const listAdminHistory = Reflect.get(
+        repositories.sends,
+        'listAdminHistory',
+      );
+      expect(listAdminHistory).toBeTypeOf('function');
+
+      if (typeof listAdminHistory !== 'function') {
+        return;
+      }
+
+      const firstPage = (await listAdminHistory({
+        search: 'history-alice',
+        limit: 1,
+        cursor: null,
+      })) as {
+        data: Array<{ id: string; recipientEmail: string }>;
+        pageInfo: {
+          limit: number;
+          hasMore: boolean;
+          nextCursor: string | null;
+        };
+      };
+
+      expect(firstPage.data).toEqual([
+        expect.objectContaining({
+          id: 'send_hist_repo_003',
+          recipientEmail: 'history-alice-latest@example.com',
+        }),
+      ]);
+      expect(firstPage.pageInfo).toMatchObject({
+        limit: 1,
+        hasMore: true,
+      });
+      expect(firstPage.pageInfo.nextCursor).toBeTruthy();
+
+      const secondPage = (await listAdminHistory({
+        search: 'history-alice',
+        limit: 1,
+        cursor: firstPage.pageInfo.nextCursor,
+      })) as {
+        data: Array<{ id: string; recipientEmail: string }>;
+        pageInfo: {
+          limit: number;
+          hasMore: boolean;
+          nextCursor: string | null;
+        };
+      };
+
+      expect(secondPage.data).toEqual([
+        expect.objectContaining({
+          id: 'send_hist_repo_001',
+          recipientEmail: 'history-alice@example.com',
+        }),
+      ]);
+      expect(secondPage.pageInfo).toMatchObject({
+        limit: 1,
+        hasMore: false,
+        nextCursor: null,
+      });
     } finally {
       await pool.end();
     }

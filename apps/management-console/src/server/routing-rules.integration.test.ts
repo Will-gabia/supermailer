@@ -17,7 +17,10 @@ describe('routing-rules', () => {
     const res = await harness.app.request('/api/auth/login', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ email: harness.env.adminEmail, password: harness.env.adminPassword }),
+      body: JSON.stringify({
+        email: harness.env.adminEmail,
+        password: harness.env.adminPassword,
+      }),
     });
     const setCookie = res.headers.get('set-cookie');
     return setCookie?.split(';')[0] ?? '';
@@ -29,7 +32,12 @@ describe('routing-rules', () => {
     const addNodeRes = await harness.app.request('/api/send-smtp-nodes', {
       method: 'POST',
       headers: { 'content-type': 'application/json', cookie },
-      body: JSON.stringify({ name: 'gmail-node', host: 'smtp.gmail.com', port: 587, priority: 1 }),
+      body: JSON.stringify({
+        name: 'gmail-node',
+        host: 'smtp.gmail.com',
+        port: 587,
+        priority: 1,
+      }),
     });
     expect(addNodeRes.status).toBe(201);
     const gmailNode = (await addNodeRes.json()).data;
@@ -37,7 +45,12 @@ describe('routing-rules', () => {
     const addNode2Res = await harness.app.request('/api/send-smtp-nodes', {
       method: 'POST',
       headers: { 'content-type': 'application/json', cookie },
-      body: JSON.stringify({ name: 'default-node', host: 'smtp.default.com', port: 587, priority: 100 }),
+      body: JSON.stringify({
+        name: 'default-node',
+        host: 'smtp.default.com',
+        port: 587,
+        priority: 100,
+      }),
     });
     expect(addNode2Res.status).toBe(201);
     const defaultNode = (await addNode2Res.json()).data;
@@ -46,19 +59,29 @@ describe('routing-rules', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json', cookie },
       body: JSON.stringify({
-        rules: [{ matchType: 'exact', domain: 'gmail.com', sendSmtpNodeId: gmailNode.id }]
+        rules: [
+          {
+            matchType: 'exact',
+            domain: 'gmail.com',
+            sendSmtpNodeId: gmailNode.id,
+          },
+        ],
       }),
     });
     expect(badRuleRes.status).toBe(400);
-    
+
     const ruleRes = await harness.app.request('/api/routing-rules', {
       method: 'POST',
       headers: { 'content-type': 'application/json', cookie },
       body: JSON.stringify({
         rules: [
-          { matchType: 'exact', domain: 'gmail.com', sendSmtpNodeId: gmailNode.id },
-          { matchType: 'default', sendSmtpNodeId: defaultNode.id }
-        ]
+          {
+            matchType: 'exact',
+            domain: 'gmail.com',
+            sendSmtpNodeId: gmailNode.id,
+          },
+          { matchType: 'default', sendSmtpNodeId: defaultNode.id },
+        ],
       }),
     });
     expect(ruleRes.status).toBe(201);
@@ -71,44 +94,54 @@ describe('routing-rules', () => {
     const rules = await getRes.json();
     expect(rules.data).toHaveLength(2);
 
-    const previewExactRes = await harness.app.request('/api/routing-rules/preview', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', cookie },
-      body: JSON.stringify({ recipientEmail: 'bob@gmail.com' }),
-    });
+    const previewExactRes = await harness.app.request(
+      '/api/routing-rules/preview',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ recipientEmail: 'bob@gmail.com' }),
+      },
+    );
     expect(previewExactRes.status).toBe(200);
     const previewExact = await previewExactRes.json();
     expect(previewExact.data.rule.matchType).toBe('exact');
     expect(previewExact.data.rule.version).toBe(1);
     expect(previewExact.data.node.name).toBe('gmail-node');
 
-    const previewFallbackRes = await harness.app.request('/api/routing-rules/preview', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', cookie },
-      body: JSON.stringify({ recipientEmail: 'alice@example.com' }),
-    });
+    const previewFallbackRes = await harness.app.request(
+      '/api/routing-rules/preview',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ recipientEmail: 'alice@example.com' }),
+      },
+    );
     expect(previewFallbackRes.status).toBe(200);
     const previewFallback = await previewFallbackRes.json();
     expect(previewFallback.data.rule.matchType).toBe('default');
     expect(previewFallback.data.rule.version).toBe(1);
     expect(previewFallback.data.node.name).toBe('default-node');
 
-    const deactivateNodeRes = await harness.app.request(`/api/send-smtp-nodes/${defaultNode.id}`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json', cookie },
-      body: JSON.stringify({ isActive: false }),
-    });
+    const deactivateNodeRes = await harness.app.request(
+      `/api/send-smtp-nodes/${defaultNode.id}`,
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ isActive: false }),
+      },
+    );
     expect(deactivateNodeRes.status).toBe(200);
 
-    const inactiveNodeRuleRes = await harness.app.request('/api/routing-rules', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', cookie },
-      body: JSON.stringify({
-        rules: [
-          { matchType: 'default', sendSmtpNodeId: defaultNode.id },
-        ],
-      }),
-    });
+    const inactiveNodeRuleRes = await harness.app.request(
+      '/api/routing-rules',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({
+          rules: [{ matchType: 'default', sendSmtpNodeId: defaultNode.id }],
+        }),
+      },
+    );
     expect(inactiveNodeRuleRes.status).toBe(400);
     await expect(inactiveNodeRuleRes.json()).resolves.toMatchObject({
       code: 'validation_error',
@@ -127,5 +160,66 @@ describe('routing-rules', () => {
     const previewData = await previewRes.json();
     expect(previewData.data.rule.matchType).toBe('exact');
     expect(previewData.data.node.name).toBe('gmail-node');
+  });
+
+  it('previews ordered failover nodes for a matched domain rule', async () => {
+    const cookie = await getCookie();
+
+    const addPrimaryNode = await harness.app.request('/api/send-smtp-nodes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({
+        name: 'chain-primary-node',
+        host: 'chain-primary.internal',
+        port: 2601,
+        priority: 1,
+      }),
+    });
+    const primaryNode = (await addPrimaryNode.json()).data;
+
+    const addFallbackNode = await harness.app.request('/api/send-smtp-nodes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({
+        name: 'chain-fallback-node',
+        host: 'chain-fallback.internal',
+        port: 2602,
+        priority: 2,
+      }),
+    });
+    const fallbackNode = (await addFallbackNode.json()).data;
+
+    const ruleRes = await harness.app.request('/api/routing-rules', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({
+        rules: [
+          {
+            matchType: 'exact',
+            domain: 'failover.example',
+            sendSmtpNodeId: primaryNode.id,
+            failoverNodeIds: [fallbackNode.id],
+          },
+          {
+            matchType: 'default',
+            sendSmtpNodeId: fallbackNode.id,
+          },
+        ],
+      }),
+    });
+    expect(ruleRes.status).toBe(201);
+
+    const previewRes = await harness.app.request('/api/routing-rules/preview', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ recipientEmail: 'bob@failover.example' }),
+    });
+    expect(previewRes.status).toBe(200);
+    const previewPayload = await previewRes.json();
+    expect(previewPayload.data.rule.matchType).toBe('exact');
+    expect(previewPayload.data.node.id).toBe(primaryNode.id);
+    expect(
+      previewPayload.data.nodes.map((node: { id: string }) => node.id),
+    ).toContain(primaryNode.id);
   });
 });

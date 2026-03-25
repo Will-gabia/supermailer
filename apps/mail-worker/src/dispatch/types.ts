@@ -29,6 +29,7 @@ export type DispatchAttemptRequest = {
   subject: string;
   html: string;
   text: string | null;
+  eml: string | null;
   smtpNode: {
     id: string;
     host: string;

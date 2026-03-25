@@ -69,9 +69,7 @@ export const startMailWorkerRuntime = () => {
 
 export {
   createSendDispatchQueue,
-  createSubscriberSyncQueue,
   enqueueSendDispatchJob,
-  enqueueSubscriberSyncJob,
 } from './queue/primitives';
 
 export {

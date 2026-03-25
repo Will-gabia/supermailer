@@ -88,11 +88,6 @@ export {
   SEND_DISPATCH_RETRY_DELAYS_MS,
   SUPERMAILER_QUEUE_NAMES,
   createSendDispatchJobId,
-  createSubscriberSyncJobId,
 } from './queue';
 
-export type {
-  SendDispatchJob,
-  SubscriberSyncJob,
-  SupermailerQueueName,
-} from './queue';
+export type { SendDispatchJob, SupermailerQueueName } from './queue';

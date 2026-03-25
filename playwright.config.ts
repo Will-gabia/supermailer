@@ -11,15 +11,16 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: 'NODE_ENV=test pnpm --filter @supermailer/management-console dev:server',
+      command:
+        'NODE_ENV=test pnpm --filter @supermailer/management-console dev:server',
       url: 'http://localhost:3000/api/health',
-      reuseExistingServer: false,
+      reuseExistingServer: true,
       timeout: 120000,
     },
     {
       command: 'pnpm --filter @supermailer/management-console dev',
       url: 'http://localhost:4173',
-      reuseExistingServer: false,
+      reuseExistingServer: true,
       timeout: 120000,
     },
   ],

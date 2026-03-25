@@ -1,0 +1,520 @@
+openapi: 3.1.0
+info:
+  title: Supermailer Client API
+  version: 1.0.0
+  summary: Send-only email delivery API with callback registration and result polling
+  description: |
+    Supermailer is a send-only service.
+
+    External clients are expected to:
+    - manage recipients and templates outside Supermailer,
+    - enqueue raw RFC 822 / EML messages through `POST /api/sends`,
+    - optionally pre-register callback endpoints,
+    - reconcile final state through `GET /api/send-results`.
+
+    Authentication for all client-facing send APIs uses the `x-api-key` header.
+servers:
+  - url: http://localhost:3000
+    description: Local development server
+tags:
+  - name: Health
+    description: Unauthenticated service connectivity checks
+  - name: Callback Endpoints
+    description: Register and list client-owned result callback endpoints
+  - name: Sends
+    description: Queue raw RFC 822 / EML messages for delivery
+  - name: Send Results
+    description: Poll changed send results by timestamp
+security:
+  - ApiKeyAuth: []
+paths:
+  /api/health:
+    get:
+      tags: [Health]
+      summary: Check API health
+      description: Lightweight connectivity check for the management-console API.
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              examples:
+                healthy:
+                  value:
+                    service: management-console
+                    status: healthy
+                    port: 3000
+  /api/callback-endpoints:
+    post:
+      tags: [Callback Endpoints]
+      summary: Register a callback endpoint
+      description: |
+        Registers a callback endpoint owned by the authenticated API key.
+
+        The returned endpoint ID can later be attached to send requests through
+        `callbackEndpointId`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCallbackEndpointRequest'
+            examples:
+              basic:
+                value:
+                  label: ops-webhook
+                  targetUrl: https://client.example.com/webhooks/send-results
+      responses:
+        '201':
+          description: Callback endpoint created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CallbackEndpointEnvelope'
+        '400':
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                missingFields:
+                  value:
+                    code: validation_error
+                    message: label and targetUrl are required
+        '401':
+          $ref: '#/components/responses/ApiKeyInvalid'
+        '403':
+          $ref: '#/components/responses/ApiKeyScopeDenied'
+    get:
+      tags: [Callback Endpoints]
+      summary: List callback endpoints
+      description: Returns callback endpoints owned by the authenticated API key.
+      responses:
+        '200':
+          description: Callback endpoint list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CallbackEndpointListEnvelope'
+        '401':
+          $ref: '#/components/responses/ApiKeyInvalid'
+        '403':
+          $ref: '#/components/responses/ApiKeyScopeDenied'
+  /api/sends:
+    post:
+      tags: [Sends]
+      summary: Queue a raw EML email
+      description: |
+        Queues a raw RFC 822 / EML message for delivery.
+
+        Supermailer does not render templates for this API. The client must send
+        the final MIME message and Supermailer extracts searchable metadata such
+        as recipient and subject from the EML headers.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSendRequest'
+            examples:
+              withoutCallback:
+                value:
+                  eml: |-
+                    From: sender@example.com
+                    To: alice@example.com
+                    Subject: Hello from Supermailer
+                    MIME-Version: 1.0
+                    Content-Type: text/plain; charset=utf-8
+
+                    Hello from Supermailer
+              withCallback:
+                value:
+                  eml: |-
+                    From: sender@example.com
+                    To: alice@example.com
+                    Subject: Hello from Supermailer
+                    MIME-Version: 1.0
+                    Content-Type: text/plain; charset=utf-8
+
+                    Hello from Supermailer
+                  callbackEndpointId: 01HQABCDEFG1234567890XYZ12
+      responses:
+        '202':
+          description: Send accepted and queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateSendResponse'
+        '400':
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                missingBodyFields:
+                  value:
+                    code: validation_error
+                    message: eml is required
+                invalidCallbackEndpoint:
+                  value:
+                    code: validation_error
+                    message: callbackEndpointId is invalid
+        '401':
+          $ref: '#/components/responses/ApiKeyInvalid'
+        '403':
+          $ref: '#/components/responses/ApiKeyScopeDenied'
+  /api/send-results:
+    get:
+      tags: [Send Results]
+      summary: Poll send results updated since a timestamp
+      description: |
+        Returns send records that changed at or after `updatedSince` for the
+        authenticated API key.
+
+        This endpoint is the canonical reconciliation interface. Webhooks should
+        be treated as a fast notification layer, while polling remains the
+        source of truth for recovery and backfill.
+      parameters:
+        - name: updatedSince
+          in: query
+          required: true
+          description: ISO 8601 timestamp in UTC
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          required: false
+          description: Result size cap between 1 and 500, default 100
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        '200':
+          description: Result set
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendResultListEnvelope'
+        '400':
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidUpdatedSince:
+                  value:
+                    code: validation_error
+                    message: updatedSince must be a valid ISO date
+        '401':
+          $ref: '#/components/responses/ApiKeyInvalid'
+        '403':
+          $ref: '#/components/responses/ApiKeyScopeDenied'
+webhooks:
+  sendStatusChanged:
+    post:
+      tags: [Send Results]
+      summary: Result webhook delivered by Supermailer
+      description: |
+        When an individual send reaches a final result state and a callback
+        endpoint is registered, Supermailer POSTs a signed JSON payload to the
+        registered target URL.
+
+        Signature header: `x-supermailer-signature`
+
+        Signature algorithm:
+        - HMAC-SHA256
+        - message = raw request body
+        - key derivation purpose = `outbound-result-webhook`
+        - secret = callback endpoint signing secret stored by Supermailer
+      security:
+        - WebhookSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendStatusWebhook'
+            examples:
+              delivered:
+                value:
+                  eventType: send.status_changed
+                  sendId: 01HQSENDABCDEFG1234567890XY
+                  sendKind: individual
+                  status: delivered
+                  resultCode: delivered
+                  recipientEmail: alice@example.com
+                  occurredAt: '2026-03-23T09:10:00.000Z'
+                  event:
+                    id: 01HQEVENTABCDEFG1234567890X
+                    sendId: 01HQSENDABCDEFG1234567890XY
+                    type: delivered
+                    occurredAt: '2026-03-23T09:10:00.000Z'
+                    providerEventId: evt-result-001
+                    smtpReplyCode: '250'
+                    smtpEnhancedCode: 2.0.0
+                    reason: Delivered
+                    relay: relay.internal
+                    postfixQueueId: QID-12345
+                    provenance: normalized/internal
+      responses:
+        '200':
+          description: Webhook accepted
+        '202':
+          description: Webhook accepted for asynchronous processing
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description: API key with `individual-send` scope
+    WebhookSignature:
+      type: apiKey
+      in: header
+      name: x-supermailer-signature
+      description: HMAC-SHA256 signature of the raw request body
+  responses:
+    ApiKeyInvalid:
+      description: Missing, malformed, revoked, or invalid API key
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            invalidApiKey:
+              value:
+                code: api_key_invalid
+                message: Valid API key required
+    ApiKeyScopeDenied:
+      description: API key lacks the required scope
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            scopeDenied:
+              value:
+                code: api_key_scope_denied
+                message: API key lacks individual-send scope
+  schemas:
+    HealthResponse:
+      type: object
+      required: [service, status, port]
+      properties:
+        service:
+          type: string
+          example: management-console
+        status:
+          type: string
+          example: healthy
+        port:
+          type: integer
+          example: 3000
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    CallbackEndpoint:
+      type: object
+      required: [id, label, targetUrl, isActive, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          example: 01HQABCDEFG1234567890XYZ12
+        label:
+          type: string
+          example: ops-webhook
+        targetUrl:
+          type: string
+          format: uri
+          example: https://client.example.com/webhooks/send-results
+        isActive:
+          type: boolean
+          example: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateCallbackEndpointRequest:
+      type: object
+      required: [label, targetUrl]
+      properties:
+        label:
+          type: string
+        targetUrl:
+          type: string
+          format: uri
+    CallbackEndpointEnvelope:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/CallbackEndpoint'
+    CallbackEndpointListEnvelope:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/CallbackEndpoint'
+    CreateSendRequest:
+      type: object
+      required: [eml]
+      properties:
+        eml:
+          type: string
+          description: Raw RFC 822 / EML message including headers and body
+        callbackEndpointId:
+          type: string
+          nullable: true
+    CreateSendResponse:
+      type: object
+      required:
+        [status, scope, sendId, queueJobId, recipient, callbackEndpointId]
+      properties:
+        status:
+          type: string
+          enum: [queued]
+        scope:
+          type: string
+          enum: [send]
+        sendId:
+          type: string
+          example: 01HQSENDABCDEFG1234567890XY
+        queueJobId:
+          type: string
+          example: send-01HQSENDABCDEFG1234567890XY
+        recipient:
+          type: string
+          format: email
+        callbackEndpointId:
+          type: string
+          nullable: true
+    SendResult:
+      type: object
+      required:
+        [sendId, kind, recipientEmail, status, callbackEndpointId, updatedAt]
+      properties:
+        sendId:
+          type: string
+        kind:
+          type: string
+          enum: [individual]
+        recipientEmail:
+          type: string
+          format: email
+        status:
+          $ref: '#/components/schemas/SendStatus'
+        callbackEndpointId:
+          type: string
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+    SendResultListEnvelope:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/SendResult'
+    DeliveryEvent:
+      type: object
+      required:
+        - id
+        - sendId
+        - type
+        - occurredAt
+        - providerEventId
+        - postfixQueueId
+        - provenance
+      properties:
+        id:
+          type: string
+        sendId:
+          type: string
+        type:
+          $ref: '#/components/schemas/SendStatus'
+        occurredAt:
+          type: string
+          format: date-time
+        providerEventId:
+          type: string
+        smtpReplyCode:
+          type: string
+          nullable: true
+        smtpEnhancedCode:
+          type: string
+          nullable: true
+        reason:
+          type: string
+          nullable: true
+        relay:
+          type: string
+          nullable: true
+        postfixQueueId:
+          type: string
+          nullable: true
+        provenance:
+          type: string
+    SendStatusWebhook:
+      type: object
+      required:
+        - eventType
+        - sendId
+        - sendKind
+        - status
+        - resultCode
+        - recipientEmail
+        - occurredAt
+        - event
+      properties:
+        eventType:
+          type: string
+          enum: [send.status_changed]
+        sendId:
+          type: string
+        sendKind:
+          type: string
+          enum: [individual]
+        status:
+          $ref: '#/components/schemas/SendStatus'
+        resultCode:
+          type: string
+          enum: [delivered, bounced, failed_transient, failed_permanent]
+        recipientEmail:
+          type: string
+          format: email
+        occurredAt:
+          type: string
+          format: date-time
+        event:
+          $ref: '#/components/schemas/DeliveryEvent'
+    SendStatus:
+      type: string
+      enum:
+        - queued
+        - dispatching
+        - accepted_by_mta
+        - delivered
+        - bounced
+        - failed_transient
+        - failed_permanent
+        - deferred

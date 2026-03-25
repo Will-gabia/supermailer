@@ -1,9 +1,11 @@
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, isNull } from 'drizzle-orm';
 
 import type { ManagementConsoleDatabase } from '../db';
-import { sendSmtpNodes } from '../db/schema';
+import { sendDispatchAttempts, sendSmtpNodes, sends } from '../db/schema';
 
-export const createSendSmtpNodesRepository = (db: ManagementConsoleDatabase) => ({
+export const createSendSmtpNodesRepository = (
+  db: ManagementConsoleDatabase,
+) => ({
   create: async (input: {
     id: string;
     name: string;
@@ -34,19 +36,40 @@ export const createSendSmtpNodesRepository = (db: ManagementConsoleDatabase) => 
     const [record] = await db
       .select()
       .from(sendSmtpNodes)
-      .where(and(eq(sendSmtpNodes.id, id), eq(sendSmtpNodes.isActive, true)))
+      .where(
+        and(
+          eq(sendSmtpNodes.id, id),
+          eq(sendSmtpNodes.isActive, true),
+          isNull(sendSmtpNodes.deletedAt),
+        ),
+      )
       .limit(1);
 
     return record ?? null;
   },
   findById: async (id: string) => {
-    const [record] = await db.select().from(sendSmtpNodes).where(eq(sendSmtpNodes.id, id)).limit(1);
+    const [record] = await db
+      .select()
+      .from(sendSmtpNodes)
+      .where(eq(sendSmtpNodes.id, id))
+      .limit(1);
 
     return record ?? null;
   },
-  list: async () => db.select().from(sendSmtpNodes).orderBy(asc(sendSmtpNodes.priority), asc(sendSmtpNodes.name)),
+  list: async () =>
+    db
+      .select()
+      .from(sendSmtpNodes)
+      .where(isNull(sendSmtpNodes.deletedAt))
+      .orderBy(asc(sendSmtpNodes.priority), asc(sendSmtpNodes.name)),
   listActive: async () =>
-    db.select().from(sendSmtpNodes).where(eq(sendSmtpNodes.isActive, true)).orderBy(asc(sendSmtpNodes.priority), asc(sendSmtpNodes.name)),
+    db
+      .select()
+      .from(sendSmtpNodes)
+      .where(
+        and(eq(sendSmtpNodes.isActive, true), isNull(sendSmtpNodes.deletedAt)),
+      )
+      .orderBy(asc(sendSmtpNodes.priority), asc(sendSmtpNodes.name)),
   update: async (
     id: string,
     input: {
@@ -75,5 +98,45 @@ export const createSendSmtpNodesRepository = (db: ManagementConsoleDatabase) => 
       .returning();
 
     return record ?? null;
+  },
+  hasHistoricalReferences: async (id: string) => {
+    const [sendRecord] = await db
+      .select({ id: sends.id })
+      .from(sends)
+      .where(eq(sends.sendSmtpNodeId, id))
+      .limit(1);
+
+    if (sendRecord) {
+      return true;
+    }
+
+    const [attemptRecord] = await db
+      .select({ id: sendDispatchAttempts.id })
+      .from(sendDispatchAttempts)
+      .where(eq(sendDispatchAttempts.sendSmtpNodeId, id))
+      .limit(1);
+
+    return Boolean(attemptRecord);
+  },
+  tombstoneById: async (id: string, deletedAt = new Date()) => {
+    const [record] = await db
+      .update(sendSmtpNodes)
+      .set({
+        isActive: false,
+        deletedAt,
+        updatedAt: deletedAt,
+      })
+      .where(eq(sendSmtpNodes.id, id))
+      .returning({ id: sendSmtpNodes.id });
+
+    return Boolean(record);
+  },
+  deleteById: async (id: string) => {
+    const [record] = await db
+      .delete(sendSmtpNodes)
+      .where(eq(sendSmtpNodes.id, id))
+      .returning({ id: sendSmtpNodes.id });
+
+    return Boolean(record);
   },
 });
